@@ -30,7 +30,6 @@ whisper_turbo_pipe = pipeline(
     model="openai/whisper-large-v3-turbo",
     torch_dtype=torch.float16,
     device='cuda',
-    low_cpu_mem_usage=True
 )
 
 def ids_to_speech_tokens(speech_ids):
