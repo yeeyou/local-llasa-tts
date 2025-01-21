@@ -15,8 +15,9 @@ tokenizer = AutoTokenizer.from_pretrained(llasa_3b)
 model = AutoModelForCausalLM.from_pretrained(
     llasa_3b,
     trust_remote_code=True,
-    device_map='cuda',
-    quantization_config=quantization_config
+    device_map='auto',
+    quantization_config=quantization_config,
+    low_cpu_mem_usage=True
 )
 
 model_path = "srinivasbilla/xcodec2"
@@ -28,7 +29,8 @@ whisper_turbo_pipe = pipeline(
     "automatic-speech-recognition",
     model="openai/whisper-large-v3-turbo",
     torch_dtype=torch.float16,
-    device='cuda',
+    device='auto',
+    low_cpu_mem_usage=True
 )
 
 def ids_to_speech_tokens(speech_ids):
@@ -179,13 +181,13 @@ import argparse
 def main(app):
     parser = argparse.ArgumentParser(description="Process some files.")
     
-    parser.add_argument("--share", help="Enable verbose output", action="store_true")
+    parser.add_argument("--share", help="Enable gradio share", action="store_true")
     
     # Parse the arguments
     args = parser.parse_args()
     
 
-    if args.verbose:
+    if args.share:
         app.launch(share=True)
     else:
         app.launch()
