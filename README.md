@@ -10,9 +10,7 @@ Examples of using the llasa-tts models locally
 # Colab
 <a href="https://colab.research.google.com/github/nivibilla/local-llasa-tts/blob/main/colab_notebook_4bit.ipynb" target="_parent"><img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/></a>
 
-# Local
-
-## Native HF Transformers Inference (4 Bit with nvidia gpu)
+# Native HF Transformers Inference (4 Bit with nvidia gpu)
 Runs a gradio app similar to https://huggingface.co/spaces/srinivasbilla/llasa-3b-tts
 ```
 %sh
@@ -22,3 +20,8 @@ pip install -r ./requirements_native_hf.txt
 pip install -r ./requirements_base.txt
 python ./hf_app.py
 ```
+
+# Long text inference with VLLM and chunking
+see `llasa_vllm_longtext_inference.ipynb`
+
+
