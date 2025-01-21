@@ -15,7 +15,7 @@ tokenizer = AutoTokenizer.from_pretrained(llasa_3b)
 model = AutoModelForCausalLM.from_pretrained(
     llasa_3b,
     trust_remote_code=True,
-    device_map='auto',
+    device_map='cuda',
     quantization_config=quantization_config,
     low_cpu_mem_usage=True
 )
@@ -29,7 +29,7 @@ whisper_turbo_pipe = pipeline(
     "automatic-speech-recognition",
     model="openai/whisper-large-v3-turbo",
     torch_dtype=torch.float16,
-    device='auto',
+    device='cuda',
     low_cpu_mem_usage=True
 )
 
