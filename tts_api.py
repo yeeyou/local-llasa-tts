@@ -149,8 +149,10 @@ async def process_tts(audio_path: str, target_text: str):
 @app.post("/tts/")
 async def create_tts(
     audio: UploadFile = File(...),
-    text: str = Form(default="")  # 修改这里，使用Form而不是直接使用str
+    text: str = Form(default="")
 ):
+    temp_audio_path = None
+    output_path = None
     try:
         logger.info("="*50)
         logger.info(f"收到新的TTS请求:")
@@ -173,13 +175,17 @@ async def create_tts(
             temp_audio.write(content)
             temp_audio_path = temp_audio.name
 
+        # 创建临时输出文件
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_output:
+            output_path = temp_output.name
+            logger.info(f"创建临时输出文件: {output_path}")
+            
         try:
             logger.info("开始处理 TTS...")
             # 处理 TTS，允许空文本，此时将使用语音识别结果
             audio_array = await process_tts(temp_audio_path, text)
             
             logger.info("生成音频文件...")
-            output_path = "output.wav"
             import soundfile as sf
             sf.write(output_path, audio_array, 16000)
             
@@ -188,7 +194,8 @@ async def create_tts(
                 output_path, 
                 media_type="audio/wav", 
                 filename="generated_audio.wav",
-                headers={"Content-Disposition": "attachment; filename=generated_audio.wav"}
+                headers={"Content-Disposition": "attachment; filename=generated_audio.wav"},
+                background=None  # 禁用后台任务，确保文件被完整发送
             )
         
         except Exception as e:
@@ -202,17 +209,13 @@ async def create_tts(
         raise HTTPException(status_code=500, detail=f"服务器错误: {str(e)}")
     finally:
         # 清理临时文件
-        if 'temp_audio_path' in locals():
-            try:
-                os.unlink(temp_audio_path)
-            except Exception as e:
-                logger.warning(f"清理临时音频文件失败: {str(e)}")
-        
-        if os.path.exists("output.wav"):
-            try:
-                os.unlink("output.wav")
-            except Exception as e:
-                logger.warning(f"清理输出音频文件失败: {str(e)}")
+        for path in [temp_audio_path, output_path]:
+            if path and os.path.exists(path):
+                try:
+                    os.unlink(path)
+                    logger.info(f"已清理临时文件: {path}")
+                except Exception as e:
+                    logger.warning(f"清理临时文件失败 {path}: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
