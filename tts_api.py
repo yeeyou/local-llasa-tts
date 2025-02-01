@@ -151,6 +151,9 @@ async def process_tts(audio_path: str, target_text: str):
         logger.error(f"处理过程中发生错误: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+# 添加允许的音频格式
+ALLOWED_FORMATS = {'.wav', '.mp3'}
+
 @app.post("/tts/")
 async def create_tts(
     audio: UploadFile = File(...),
@@ -164,14 +167,18 @@ async def create_tts(
         logger.info(f"原始文本内容: '{text}'")
         
         # 验证音频文件
-        if not audio.filename.endswith('.wav'):
-            raise HTTPException(status_code=400, detail="只支持 WAV 格式音频文件")
+        file_extension = Path(audio.filename).suffix.lower()
+        if file_extension not in ALLOWED_FORMATS:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"不支持的音频格式。支持的格式: {', '.join(ALLOWED_FORMATS)}"
+            )
             
         # 验证文本
         text = text.strip()
         
         # 保存上传的音频文件到临时目录
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp_audio:
             content = await audio.read()
             temp_audio.write(content)
             temp_audio_path = temp_audio.name
@@ -205,7 +212,7 @@ async def create_tts(
             try:
                 os.unlink(temp_audio_path)
             except Exception as e:
-                logger.warning(f"清理临时文件失败: {str(e)}")
+                logger.warning(f"清理临时文��失败: {str(e)}")
 
 if __name__ == "__main__":
     print("\n" + "="*50)
