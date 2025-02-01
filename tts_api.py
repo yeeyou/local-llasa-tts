@@ -25,48 +25,20 @@ quantization_config = BitsAndBytesConfig(load_in_4bit=True)
 LOCAL_MODEL_PATH = "./models/llasa-3b"
 LOCAL_CODEC_PATH = "./models/xcodec2"
 
-def check_model_paths():
-    """检查模型文件是否存在"""
-    models = {
-        'LLASA': LOCAL_MODEL_PATH,
-        'XCodec2': LOCAL_CODEC_PATH,
-        'Whisper': "./models/whisper-large-v3-turbo"
-    }
-    
-    for name, path in models.items():
-        if not os.path.exists(path):
-            logger.error(f"错误: {name} 模型路径不存在: {path}")
-            return False
-        else:
-            logger.info(f"√ {name} 模型路径正确: {path}")
-    return True
-
-# 在加载模型前先检查路径
-logger.info("检查模型路径...")
-if not check_model_paths():
-    logger.error("模型路径检查失败，请确保模型文件已下载到正确位置")
-    exit(1)
-
 logger.info("加载分词器...")
-tokenizer = AutoTokenizer.from_pretrained(
-    LOCAL_MODEL_PATH,
-    local_files_only=True  # 强制使用本地文件
-)
+tokenizer = AutoTokenizer.from_pretrained(LOCAL_MODEL_PATH)
 logger.info("加载 LLASA 模型...")
 model = AutoModelForCausalLM.from_pretrained(
     LOCAL_MODEL_PATH,
     trust_remote_code=True,
     device_map='cuda',
     quantization_config=quantization_config,
-    low_cpu_mem_usage=True,
-    local_files_only=True  # 强制使用本地文件
+    low_cpu_mem_usage=True
 )
 
 logger.info("加载 XCodec2 模型...")
-Codec_model = XCodec2Model.from_pretrained(
-    LOCAL_CODEC_PATH,
-    local_files_only=True  # 强制使用本地文件
-)
+Codec_model = XCodec2Model.from_pretrained(LOCAL_CODEC_PATH)
+Codec_model.eval().cuda()
 
 logger.info("加载 Whisper 模型...")
 whisper_turbo_pipe = pipeline(
@@ -74,9 +46,7 @@ whisper_turbo_pipe = pipeline(
     model="./models/whisper-large-v3-turbo",
     torch_dtype=torch.float16,
     device='cuda',
-    local_files_only=True  # 强制使用本地文件
 )
-
 logger.info("所有模型加载完成！")
 
 def ids_to_speech_tokens(speech_ids):
