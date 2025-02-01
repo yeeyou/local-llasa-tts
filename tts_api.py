@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+import time
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse
 import torch
@@ -6,6 +9,7 @@ import tempfile
 import os
 import logging
 import sys
+import uvicorn
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig
 from xcodec2.modeling_xcodec2 import XCodec2Model
 
@@ -20,11 +24,12 @@ logging.basicConfig(
     force=True  # 强制重新配置日志
 )
 
-# 设置uvicorn的日志配置
-uvicorn_logger = logging.getLogger("uvicorn")
-uvicorn_logger.handlers = logging.getLogger().handlers
-
+# 移除uvicorn logger配置，避免重复日志
 logger = logging.getLogger(__name__)
+
+# 创建输出目录
+OUTPUT_DIR = Path.home() / "tts_out"
+OUTPUT_DIR.mkdir(exist_ok=True)
 
 app = FastAPI()
 
@@ -152,7 +157,6 @@ async def create_tts(
     text: str = Form(default="")
 ):
     temp_audio_path = None
-    output_path = None
     try:
         logger.info("="*50)
         logger.info(f"收到新的TTS请求:")
@@ -165,72 +169,55 @@ async def create_tts(
             
         # 验证文本
         text = text.strip()
-        logger.info(f"处理后文本内容: '{text}'")
-        logger.info(f"文本长度: {len(text)}")
-        logger.info("="*50)
-
-        # 保存上传的音频文件
+        
+        # 保存上传的音频文件到临时目录
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio:
             content = await audio.read()
             temp_audio.write(content)
             temp_audio_path = temp_audio.name
 
-        # 创建临时输出文件
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_output:
-            output_path = temp_output.name
-            logger.info(f"创建临时输出文件: {output_path}")
-            
         try:
             logger.info("开始处理 TTS...")
-            # 处理 TTS，允许空文本，此时将使用语音识别结果
             audio_array = await process_tts(temp_audio_path, text)
             
-            logger.info("生成音频文件...")
+            # 使用时间戳创建唯一的输出文件名
+            output_filename = f"output_{int(time.time())}.wav"
+            output_path = OUTPUT_DIR / output_filename
+            
+            logger.info(f"生成音频文件: {output_path}")
             import soundfile as sf
-            sf.write(output_path, audio_array, 16000)
+            sf.write(str(output_path), audio_array, 16000)
             
             logger.info("TTS 处理完成，返回音频文件")
             return FileResponse(
-                output_path, 
-                media_type="audio/wav", 
-                filename="generated_audio.wav",
-                headers={"Content-Disposition": "attachment; filename=generated_audio.wav"},
-                background=None  # 禁用后台任务，确保文件被完整发送
+                str(output_path),
+                media_type="audio/wav",
+                filename=output_filename
             )
         
         except Exception as e:
             logger.error(f"TTS 处理失败: {str(e)}")
             raise HTTPException(status_code=500, detail=f"TTS 处理失败: {str(e)}")
             
-    except HTTPException as he:
-        raise he
-    except Exception as e:
-        logger.error(f"请求处理失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"服务器错误: {str(e)}")
     finally:
-        # 清理临时文件
-        for path in [temp_audio_path, output_path]:
-            if path and os.path.exists(path):
-                try:
-                    os.unlink(path)
-                    logger.info(f"已清理临时文件: {path}")
-                except Exception as e:
-                    logger.warning(f"清理临时文件失败 {path}: {str(e)}")
+        # 只清理临时音频文件
+        if temp_audio_path and os.path.exists(temp_audio_path):
+            try:
+                os.unlink(temp_audio_path)
+            except Exception as e:
+                logger.warning(f"清理临时文件失败: {str(e)}")
 
 if __name__ == "__main__":
-    import uvicorn
     print("\n" + "="*50)
     logger.info("TTS 服务正在启动...")
-    logger.info("模型加载可能需要几分钟时间，请耐心等待")
+    logger.info(f"输出目录: {OUTPUT_DIR}")
     logger.info("API文档地址: http://localhost:8008/docs")
     print("="*50 + "\n")
     
-    # 修改uvicorn启动配置
     uvicorn.run(
         app, 
         host="0.0.0.0", 
         port=8008, 
         log_level="info",
-        access_log=True,
-        log_config=None  # 禁用uvicorn默认的日志配置
+        access_log=False  # 禁用访问日志以避免重复
     )
