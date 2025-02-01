@@ -9,15 +9,21 @@ import sys
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig
 from xcodec2.modeling_xcodec2 import XCodec2Model
 
-# 配置日志
+# 修改日志配置
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
-        logging.StreamHandler(sys.stdout),  # 输出到控制台
-        logging.FileHandler('tts_service.log')  # 输出到文件
-    ]
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('tts_service.log', encoding='utf-8')
+    ],
+    force=True  # 强制重新配置日志
 )
+
+# 设置uvicorn的日志配置
+uvicorn_logger = logging.getLogger("uvicorn")
+uvicorn_logger.handlers = logging.getLogger().handlers
+
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
@@ -201,8 +207,18 @@ async def create_tts(audio: UploadFile = File(...), text: str = ""):
 
 if __name__ == "__main__":
     import uvicorn
-    logger.info("=========================================")
-    logger.info("        TTS 服务启动                     ")
-    logger.info("=========================================")
+    print("\n" + "="*50)
+    logger.info("TTS 服务正在启动...")
+    logger.info("模型加载可能需要几分钟时间，请耐心等待")
     logger.info("API文档地址: http://localhost:8008/docs")
-    uvicorn.run(app, host="0.0.0.0", port=8008, log_level="info")
+    print("="*50 + "\n")
+    
+    # 修改uvicorn启动配置
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=8008, 
+        log_level="info",
+        access_log=True,
+        log_config=None  # 禁用uvicorn默认的日志配置
+    )
