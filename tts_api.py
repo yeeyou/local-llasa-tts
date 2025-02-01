@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse
 import torch
 import torchaudio
@@ -147,16 +147,25 @@ async def process_tts(audio_path: str, target_text: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/tts/")
-async def create_tts(audio: UploadFile = File(...), text: str = ""):
+async def create_tts(
+    audio: UploadFile = File(...),
+    text: str = Form(default="")  # 修改这里，使用Form而不是直接使用str
+):
     try:
-        logger.info(f"收到新的TTS请求 - 文件: {audio.filename}, 文本长度: {len(text)}")
+        logger.info("="*50)
+        logger.info(f"收到新的TTS请求:")
+        logger.info(f"音频文件: {audio.filename}")
+        logger.info(f"原始文本内容: '{text}'")
+        
         # 验证音频文件
         if not audio.filename.endswith('.wav'):
             raise HTTPException(status_code=400, detail="只支持 WAV 格式音频文件")
             
         # 验证文本
         text = text.strip()
-        logger.info(f"收到新的 TTS 请求 - 音频文件: {audio.filename}, 文本长度: {len(text)}")
+        logger.info(f"处理后文本内容: '{text}'")
+        logger.info(f"文本长度: {len(text)}")
+        logger.info("="*50)
 
         # 保存上传的音频文件
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio:
