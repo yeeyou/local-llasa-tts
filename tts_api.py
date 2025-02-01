@@ -5,20 +5,25 @@ import torchaudio
 import tempfile
 import os
 import logging
+import sys
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig
 from xcodec2.modeling_xcodec2 import XCodec2Model
 
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),  # 输出到控制台
+        logging.FileHandler('tts_service.log')  # 输出到文件
+    ]
 )
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
 # 模型加载
-logger.info("开始加载模型...")
+logger.info("=================== 开始加载模型 ===================")
 quantization_config = BitsAndBytesConfig(load_in_4bit=True)
 
 # 修改为本地模型路径
@@ -68,8 +73,11 @@ def extract_speech_ids(speech_tokens_str):
 
 async def process_tts(audio_path: str, target_text: str):
     try:
+        logger.info(f"开始处理音频，目标文本长度：{len(target_text)}")
         waveform, sample_rate = torchaudio.load(audio_path)
+        
         if len(waveform[0])/sample_rate > 15:
+            logger.info("音频长度超过15秒，将被截断")
             waveform = waveform[:, :sample_rate*15]
 
         if waveform.size(0) > 1:
@@ -78,7 +86,9 @@ async def process_tts(audio_path: str, target_text: str):
             waveform_mono = waveform
 
         prompt_wav = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=16000)(waveform_mono)
+        logger.info("正在进行语音识别...")
         prompt_text = whisper_turbo_pipe(prompt_wav[0].numpy())['text'].strip()
+        logger.info(f"语音识别结果: {prompt_text}")
 
         if len(target_text) == 0:
             raise HTTPException(status_code=400, detail="Target text cannot be empty")
@@ -123,45 +133,76 @@ async def process_tts(audio_path: str, target_text: str):
             gen_wav = Codec_model.decode_code(speech_tokens) 
             gen_wav = gen_wav[:,:,prompt_wav.shape[1]:]
 
+            logger.info("语音生成完成")
             return gen_wav[0, 0, :].cpu().numpy()
 
     except Exception as e:
+        logger.error(f"处理过程中发生错误: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/tts/")
 async def create_tts(audio: UploadFile = File(...), text: str = ""):
-    logger.info(f"收到新的 TTS 请求，文本长度: {len(text)}")
-    # 保存上传的音频文件
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio:
-        content = await audio.read()
-        temp_audio.write(content)
-        temp_audio_path = temp_audio.name
-
     try:
-        logger.info("开始处理 TTS...")
-        # 处理TTS
-        audio_array = await process_tts(temp_audio_path, text)
+        logger.info(f"收到新的TTS请求 - 文件: {audio.filename}, 文本长度: {len(text)}")
+        # 验证音频文件
+        if not audio.filename.endswith('.wav'):
+            raise HTTPException(status_code=400, detail="只支持 WAV 格式音频文件")
+            
+        # 验证文本
+        text = text.strip()
+        logger.info(f"收到新的 TTS 请求 - 音频文件: {audio.filename}, 文本长度: {len(text)}")
+
+        # 保存上传的音频文件
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio:
+            content = await audio.read()
+            temp_audio.write(content)
+            temp_audio_path = temp_audio.name
+
+        try:
+            logger.info("开始处理 TTS...")
+            # 处理 TTS，允许空文本，此时将使用语音识别结果
+            audio_array = await process_tts(temp_audio_path, text)
+            
+            logger.info("生成音频文件...")
+            output_path = "output.wav"
+            import soundfile as sf
+            sf.write(output_path, audio_array, 16000)
+            
+            logger.info("TTS 处理完成，返回音频文件")
+            return FileResponse(
+                output_path, 
+                media_type="audio/wav", 
+                filename="generated_audio.wav",
+                headers={"Content-Disposition": "attachment; filename=generated_audio.wav"}
+            )
         
-        logger.info("生成音频文件...")
-        # 保存生成的音频
-        output_path = "output.wav"
-        import soundfile as sf
-        sf.write(output_path, audio_array, 16000)
-        
-        logger.info("TTS 处理完成，返回音频文件")
-        return FileResponse(output_path, media_type="audio/wav", filename="generated_audio.wav")
-    
+        except Exception as e:
+            logger.error(f"TTS 处理失败: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"TTS 处理失败: {str(e)}")
+            
+    except HTTPException as he:
+        raise he
     except Exception as e:
-        logger.error(f"处理 TTS 时发生错误: {str(e)}")
-        raise
+        logger.error(f"请求处理失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"服务器错误: {str(e)}")
     finally:
         # 清理临时文件
-        os.unlink(temp_audio_path)
+        if 'temp_audio_path' in locals():
+            try:
+                os.unlink(temp_audio_path)
+            except Exception as e:
+                logger.warning(f"清理临时音频文件失败: {str(e)}")
+        
         if os.path.exists("output.wav"):
-            os.unlink("output.wav")
+            try:
+                os.unlink("output.wav")
+            except Exception as e:
+                logger.warning(f"清理输出音频文件失败: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
-    logger.info("启动 TTS 服务...")
-    logger.info("API 文档可以访问: http://localhost:8008/docs")
-    uvicorn.run(app, host="0.0.0.0", port=8008)
+    logger.info("=========================================")
+    logger.info("        TTS 服务启动                     ")
+    logger.info("=========================================")
+    logger.info("API文档地址: http://localhost:8008/docs")
+    uvicorn.run(app, host="0.0.0.0", port=8008, log_level="info")
