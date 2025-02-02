@@ -4,6 +4,7 @@ import base64
 import tempfile
 import argparse
 import numpy as np
+import random
 
 import torch
 import torchaudio
@@ -73,6 +74,7 @@ model_path = "srinivasbilla/xcodec2"
 Codec_model = XCodec2Model.from_pretrained(model_path)
 Codec_model.eval().cuda()
 
+# Initialize whisper pipeline with minimal configuration
 whisper_turbo_pipe = pipeline(
     "automatic-speech-recognition",
     model="openai/whisper-large-v3-turbo",
@@ -191,7 +193,7 @@ def render_previous_generations(history_list, is_generating=False):
         <div style="background: #33344D; border-radius: 8px; padding: 1rem; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
             <h3 style="margin: 0; font-size: 1.1rem;">Mode: {mode}</h3>
             <p style="margin: 0.5rem 0;"><strong>Text:</strong> {text}</p>
-            <p style="margin: 0.5rem 0;"><strong>Params:</strong> max_len={max_length}, temp={temperature}, top_p={top_p}</p>
+            <p style="margin: 0.5rem 0;"><strong>Params:</strong> max_len={max_length}, temp={temperature}, top_p={top_p}{', seed=' + str(entry.get('seed')) if entry.get('seed') is not None else ''}</p>
             <div class="audio-controls">
                 <audio controls src="{audio_url}"></audio>
             </div>
@@ -206,6 +208,15 @@ def render_previous_generations(history_list, is_generating=False):
 #                          MAIN INFERENCE FUNCTION                            #
 ###############################################################################
 
+def set_seed(seed):
+    """Set seeds for reproducible generation across PyTorch, NumPy, and Python's random."""
+    if seed is not None:
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        np.random.seed(seed)
+        random.seed(seed)
+        torch.backends.cudnn.deterministic = True
+
 def infer(
     generation_mode,         # "Text only" or "Reference audio"
     ref_audio_path,          # Reference audio path (if any)
@@ -216,9 +227,13 @@ def infer(
     max_length,              # Generation param
     temperature,             # Generation param
     top_p,                   # Generation param
+    whisper_language,        # Language for Whisper transcription
+    seed,                    # Random seed for reproducible generation
     prev_history,            # The stored history in State
     progress=gr.Progress()
 ):
+    # Set seed if provided
+    set_seed(seed)
     # If user doesn't supply an API key in the UI, try environment variable
     if not hf_api_key or not hf_api_key.strip():
         env_key = os.environ.get(HF_KEY_ENV_VAR, "").strip()
@@ -251,8 +266,11 @@ def infer(
 
         # Resample to 16kHz
         prompt_wav = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=16000)(waveform_mono)
-        # Transcribe
-        prompt_text = whisper_turbo_pipe(prompt_wav[0].numpy())['text'].strip()
+        # Transcribe with selected language
+        prompt_text = whisper_turbo_pipe(
+            prompt_wav[0].numpy(),
+            generate_kwargs={"language": whisper_language} if whisper_language != "auto" else {}
+        )['text'].strip()
 
         # Encode the reference audio into speech tokens
         with torch.no_grad():
@@ -325,6 +343,7 @@ def infer(
         "temperature": temperature,
         "top_p": top_p,
         "max_length": max_length,
+        "seed": seed,  # Track seed in history
     }
     if len(prev_history) >= MAX_HISTORY:
         prev_history.pop(0)
@@ -610,6 +629,20 @@ def build_dashboard():
                         minimum=0.1, maximum=1.0, value=1.0, step=0.05,
                         label="Top-p"
                     )
+                    whisper_language = gr.Dropdown(
+                        label="Whisper Language (for reference audio)",
+                        choices=["en", "auto", "ja", "zh", "de", "es", "ru", "ko", "fr", "pt", "tr", "pl", "ca", "nl", "ar", "sv", "it", "id", "hi", "fi", "vi", "he", "uk", "el", "ms", "cs", "ro", "da", "hu", "ta", "no", "th", "ur", "hr", "bg", "lt", "la", "mi", "ml", "jw", "bn", "et", "sr", "sk", "sl", "sw", "af", "fa", "am", "mr", "cy", "gu", "is", "mk", "be", "ne", "si", "kn", "az", "tl", "lv", "mt", "ga", "eu", "gl", "hy", "ka", "lb", "sq", "my", "yi", "bs", "km", "kk", "mn", "sd", "su", "ps", "ky", "ku", "uz", "bo", "sa", "tk", "sh", "yo", "mg", "ha", "as", "ny", "so", "pa", "ka", "te", "tg", "ug", "zu", "sn", "ig", "xh", "st", "tn", "ak", "ht", "ln", "om", "rw", "ti", "gd", "oc", "kw", "br", "fo", "fy", "mi", "qu", "rm", "sc", "gn", "ay", "tt", "cv", "iu", "dv", "or", "lo", "ks", "wo", "ba", "ce", "na", "co", "sm", "bi", "to", "ty", "ss", "sg", "tw", "ff", "dz", "aa", "nn", "nv", "kl", "ki", "ve", "ng", "cr", "ee", "ab", "av", "os", "sc", "li", "ia", "ie", "ik", "io", "vo", "za"],
+                        value="en",
+                        type="value"
+                    )
+                    seed_number = gr.Number(
+                        label="Random Seed (optional, for reproducible generation)",
+                        value=None,
+                        precision=0,
+                        minimum=0,
+                        maximum=2**32-1,
+                        step=1
+                    )
                 api_key_input = gr.Textbox(
                     label="Hugging Face API Key (Optional, but needed for 8B model)",
                     type="password",
@@ -653,6 +686,8 @@ def build_dashboard():
                 max_length_slider,
                 temperature_slider,
                 top_p_slider,
+                whisper_language,
+                seed_number,
                 prev_history_state
             ],
             outputs=[audio_output, dashboard_html, prev_history_state],
