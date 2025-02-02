@@ -207,7 +207,6 @@ def initialize_models():
         model=whisper_model,
         torch_dtype=torch.float16,
         device='cuda',
-        model_kwargs={"use_cache": True}
     )
     torch.cuda.empty_cache()  # Clear any temporary GPU memory
     print(f"Whisper model loaded successfully! (GPU memory: {get_gpu_memory():.2f}GB)")
@@ -215,6 +214,14 @@ def initialize_models():
 ###############################################################################
 #                             UTILITY FUNCTIONS                               #
 ###############################################################################
+
+def toggle_auto_optimize_checkbox(mode):
+    if mode == "Text only":
+        # Enable the checkbox (leave the current value unchanged, or set it to your preferred default)
+        return gr.update(interactive=True)
+    else:
+        # Disable and uncheck the checkbox when not in "Text only" mode
+        return gr.update(interactive=False, value=False)
 
 def ids_to_speech_tokens(speech_ids):
     """Convert list of integers to <|s_#|> tokens."""
@@ -405,6 +412,7 @@ def infer(
     user_seed,               # Random seed from user
     random_seed_each_gen,    # If True, override seed with a fresh random
     beam_search_enabled,     # If True, use beam search
+    auto_optimize_length,    # NEW: user can opt in/out of auto length logic
     prev_history,            # The stored history in State
     progress=gr.Progress()
 ):
@@ -425,33 +433,28 @@ def infer(
 
     tokenizer, model = get_llasa_model(model_version, hf_api_key=hf_api_key)
 
-    # Basic text checks
     if len(target_text) == 0:
         return None, render_previous_generations(prev_history), prev_history
     elif len(target_text) > 1000:
         gr.warning("Text is too long. Truncating to 1000 characters.")
         target_text = target_text[:1000]
 
-    # ------------------------------------------------------------------------
-    #      AUTO OPTIMIZATION for short text to prevent over-hallucination
-    # ------------------------------------------------------------------------
-    # If the user set a large max_length (like 1024) but the text is short,
-    # forcibly clamp it to 512 for shorter texts. This is a basic heuristic.
-    if len(target_text) < 256 and max_length > 512:
-        old_val = max_length
-        max_length = 512
-        print(f"Auto optimizing: reducing max_length from {old_val} to {max_length} for short text (<256 chars)")
+    # If the user allows auto-optimizing length, apply heuristics:
+    if auto_optimize_length:
+        # For short text, clamp large max_length to 512
+        if len(target_text) < 256 and max_length > 512:
+            old_val = max_length
+            max_length = 512
+            print(f"Auto optimizing: reducing max_length from {old_val} to {max_length} for short text (<256 chars).")
 
-    # If we have a reference mode, gather a prefix
+    # If reference audio is provided, get prefix
     speech_ids_prefix = []
     prompt_text = ""
     if generation_mode == "Reference audio" and ref_audio_path:
         progress(0, "Loading & trimming reference audio...")
         waveform, sample_rate = torchaudio.load(ref_audio_path)
-        # Trim to 15 seconds if requested
         if trim_audio and len(waveform[0]) / sample_rate > 15:
             waveform = waveform[:, :sample_rate * 15]
-        # Convert to mono if needed
         if waveform.size(0) > 1:
             waveform_mono = torch.mean(waveform, dim=0, keepdim=True)
         else:
@@ -459,16 +462,22 @@ def infer(
 
         # Resample to 16kHz
         prompt_wav = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=16000)(waveform_mono)
-        # Transcribe with selected language
+        
+        # Build args for whisper
+        whisper_args = {}
+        if whisper_language != "auto":
+            # Pass language explicitly only if user didn't choose 'auto'
+            whisper_args["language"] = whisper_language
+        
+        # Transcribe with whisper
         prompt_text = whisper_turbo_pipe(
             prompt_wav[0].numpy(),
-            generate_kwargs={"language": whisper_language} if whisper_language != "auto" else {}
+            generate_kwargs=whisper_args
         )['text'].strip()
 
-        # Encode the reference audio into speech tokens
+        # Encode reference audio into speech tokens
         with torch.no_grad():
             vq_code_prompt = Codec_model.encode_code(input_waveform=prompt_wav)
-            # shape: [batch=1, group=1, time_codes]
             vq_code_prompt = vq_code_prompt[0, 0, :]
             speech_ids_prefix = ids_to_speech_tokens(vq_code_prompt)
     elif generation_mode == "Reference audio" and not ref_audio_path:
@@ -486,23 +495,31 @@ def infer(
 
     # Decide how many beams
     num_beams = 2 if beam_search_enabled else 1
-
-    # Turn early_stopping off if we have only 1 beam, to silence the HF warning
+    # Turn early_stopping off if we have only 1 beam
     early_stopping_val = (num_beams > 1)
 
-    with torch.no_grad():
-        model_inputs = tokenizer.apply_chat_template(
-            chat,
-            tokenize=True,
-            return_tensors="pt",
-            continue_final_message=True
-        )
-        
-        input_ids = model_inputs.to("cuda")
-        attention_mask = torch.ones_like(input_ids).to("cuda")
-        
-        speech_end_id = tokenizer.convert_tokens_to_ids("<|SPEECH_GENERATION_END|>")
+    # Prepare input
+    model_inputs = tokenizer.apply_chat_template(
+        chat,
+        tokenize=True,
+        return_tensors="pt",
+        continue_final_message=True
+    )
+    input_ids = model_inputs.to("cuda")
+    attention_mask = torch.ones_like(input_ids).to("cuda")
 
+    # If auto optimizing, ensure prefix fits + margin
+    if auto_optimize_length:
+        input_len = input_ids.shape[1]
+        margin = 50
+        if input_len + margin > max_length:
+            old_val = max_length
+            max_length = input_len + margin
+            print(f"Auto optimizing: input length is {input_len}, raising max_length from {old_val} to {max_length} to accommodate prefix + margin.")
+
+    speech_end_id = tokenizer.convert_tokens_to_ids("<|SPEECH_GENERATION_END|>")
+
+    with torch.no_grad():
         outputs = model.generate(
             input_ids,
             attention_mask=attention_mask,
@@ -727,6 +744,10 @@ def build_dashboard():
                         label="Enable beam search",
                         value=False
                     )
+                    auto_optimize_checkbox = gr.Checkbox(
+                        label="[Text Only] Auto Optimize Length (prefix margin, short-text clamp)",
+                        value=True
+                    )
                     seed_number = gr.Number(
                         label="Seed (only used if Random seed is disabled)",
                         value=None,
@@ -741,6 +762,12 @@ def build_dashboard():
                     placeholder="Enter your HF token or leave blank"
                 )
                 generate_btn = gr.Button("Synthesize", variant="primary")
+
+                generation_mode.change(
+                    fn=toggle_auto_optimize_checkbox,
+                    inputs=[generation_mode],
+                    outputs=[auto_optimize_checkbox]
+                )
 
                 with gr.Group():
                     audio_output = gr.Audio(
@@ -783,6 +810,7 @@ def build_dashboard():
                 seed_number,
                 random_seed_checkbox,
                 beam_search_checkbox,
+                auto_optimize_checkbox,
                 prev_history_state
             ],
             outputs=[audio_output, dashboard_html, prev_history_state],
