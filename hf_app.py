@@ -95,12 +95,15 @@ def get_llasa_model(model_choice: str, hf_api_key: str = None):
         print(f"Preparing to load {repo}...", flush=True)
         print(f"Current GPU memory usage: {get_gpu_memory():.2f}GB", flush=True)
         
-        if not check_model_cache(repo):
-            print(f"Downloading {repo} model and tokenizer (this may take several minutes)...", flush=True)
-            print("Note: First-time downloads can be slow due to model size.", flush=True)
-            print("Downloading model files...", flush=True)
-        else:
+        if check_model_cache(repo):
             print(f"Loading {repo} from cache...", flush=True)
+        else:
+            print(f"Model {repo} not found in cache.", flush=True)
+            print("Starting first-time download process...", flush=True)
+            print("Note: Initial downloads can take several minutes depending on your internet speed.", flush=True)
+            print("The system is actively downloading. You will see progress updates shortly...", flush=True)
+            print("(If this is your first run, multiple models need to be downloaded)", flush=True)
+            print(f"Downloading {repo} model and tokenizer...", flush=True)
 
         print("Loading tokenizer...", flush=True)
         tokenizer = AutoTokenizer.from_pretrained(repo, use_auth_token=hf_api_key)
@@ -137,15 +140,7 @@ def check_model_cache(model_id):
     cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
     # Convert model_id to cache path format
     cache_path = os.path.join(cache_dir, model_id.replace("/", "--"))
-    if not os.path.exists(cache_path):
-        print(f"Model {model_id} not found in cache.", flush=True)
-        print("Starting first-time download process...", flush=True)
-        print("Note: Initial downloads can take several minutes depending on your internet speed.", flush=True)
-        print("The system is actively downloading. You will see progress updates shortly...", flush=True)
-        print("(If this is your first run, multiple models need to be downloaded)", flush=True)
-        return False
-    print(f"Model {model_id} found in cache.", flush=True)
-    return True
+    return os.path.exists(cache_path)
 
 def get_gpu_memory():
     """Get current GPU memory usage in GB."""
@@ -158,7 +153,14 @@ def initialize_models():
     
     print("Step 1/3: Preparing XCodec2 model...", flush=True)
     model_path = "srinivasbilla/xcodec2"
-    if not check_model_cache(model_path):
+    if check_model_cache(model_path):
+        print(f"Loading XCodec2 model from cache...", flush=True)
+    else:
+        print(f"Model {model_path} not found in cache.", flush=True)
+        print("Starting first-time download process...", flush=True)
+        print("Note: Initial downloads can take several minutes depending on your internet speed.", flush=True)
+        print("The system is actively downloading. You will see progress updates shortly...", flush=True)
+        print("(If this is your first run, multiple models need to be downloaded)", flush=True)
         print(f"Downloading {model_path} (this may take a few minutes)...", flush=True)
     print("Loading XCodec2 model into memory...", flush=True)
     Codec_model = XCodec2Model.from_pretrained(model_path)
@@ -169,7 +171,14 @@ def initialize_models():
     
     print("\nStep 2/3: Preparing Whisper model...", flush=True)
     whisper_model = "openai/whisper-large-v3-turbo"
-    if not check_model_cache(whisper_model):
+    if check_model_cache(whisper_model):
+        print(f"Loading Whisper model from cache...", flush=True)
+    else:
+        print(f"Model {whisper_model} not found in cache.", flush=True)
+        print("Starting first-time download process...", flush=True)
+        print("Note: Initial downloads can take several minutes depending on your internet speed.", flush=True)
+        print("The system is actively downloading. You will see progress updates shortly...", flush=True)
+        print("(If this is your first run, multiple models need to be downloaded)", flush=True)
         print(f"Downloading {whisper_model} (this may take a few minutes)...", flush=True)
     print("Loading Whisper model and preparing pipeline...", flush=True)
     whisper_turbo_pipe = pipeline(
