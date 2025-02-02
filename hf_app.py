@@ -176,7 +176,8 @@ def initialize_models():
         "automatic-speech-recognition",
         model=whisper_model,
         torch_dtype=torch.float16,
-        device='cuda'
+        device='cuda',
+        model_kwargs={"use_cache": True}  # Enable caching for better performance
     )
     torch.cuda.empty_cache()  # Clear any temporary GPU memory
     print(f"Whisper model loaded successfully! (GPU memory: {get_gpu_memory():.2f}GB)")
@@ -344,9 +345,9 @@ def infer(
     # Basic text checks
     if len(target_text) == 0:
         return None, render_previous_generations(prev_history), prev_history
-    elif len(target_text) > 300:
-        gr.warning("Text is too long. Truncating to 300 characters.")
-        target_text = target_text[:300]
+    elif len(target_text) > 1000:
+        gr.warning("Text is too long. Truncating to 1000 characters.")
+        target_text = target_text[:1000]
 
     # If we have a reference mode, gather a prefix
     speech_ids_prefix = []
@@ -408,10 +409,16 @@ def infer(
             attention_mask=attention_mask,
             pad_token_id=tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id,
             max_length=int(max_length),
+            min_length=int(max_length * 0.5),  # Ensure at least half of max_length is generated
             eos_token_id=speech_end_id,
             do_sample=True,
-            top_p=float(top_p),
+            num_beams=2,  # Use beam search but with fewer beams for efficiency
+            length_penalty=1.5,  # Encourage longer sequences
             temperature=float(temperature),
+            top_p=float(top_p),
+            repetition_penalty=1.2,  # Penalize repetition
+            early_stopping=True,  # Allow early stopping for efficiency
+            no_repeat_ngram_size=3,  # Prevent exact 3-gram repetitions
         )
 
         # The portion we want is from the end of the prompt (minus the prefix) to the second-last token
@@ -708,7 +715,7 @@ def build_dashboard():
                     )
                 trim_audio_checkbox = gr.Checkbox(
                     label="Trim Reference Audio to 15s?",
-                    value=True
+                    value=False
                 )
                 gen_text_input = gr.Textbox(
                     label="Text to Generate",
@@ -717,8 +724,8 @@ def build_dashboard():
                 )
                 with gr.Accordion("Advanced Generation Settings", open=False):
                     max_length_slider = gr.Slider(
-                        minimum=64, maximum=2048, value=1024, step=64,
-                        label="Max Length (tokens)"
+                        minimum=64, maximum=4096, value=2048, step=64,
+                        label="Max Length (tokens) - Higher values allow longer audio generation"
                     )
                     temperature_slider = gr.Slider(
                         minimum=0.1, maximum=2.0, value=1.0, step=0.1,
