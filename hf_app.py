@@ -61,14 +61,13 @@ from xcodec2.modeling_xcodec2 import XCodec2Model
 
 MAX_HISTORY = 5  # how many previous generations to keep in the dashboard
 
-# In-memory list of dictionaries storing generation results for the session:
-#   e.g. [ { "mode": str, "text": str, "audio_url": str, "temperature": float, ... }, ... ]
+# In-memory list of dictionaries storing generation results for the session
 history_data = []
 
 # Optional environment variable for the HF API key
 HF_KEY_ENV_VAR = "LLASA_API_KEY"
 
-# Use quantization to reduce memory usage and ensure compute dtype matches input
+# Use quantization to reduce memory usage
 quantization_config = BitsAndBytesConfig(
     load_in_4bit=True,
     bnb_4bit_compute_dtype=torch.float16,
@@ -115,7 +114,7 @@ def get_llasa_model(model_choice: str, hf_api_key: str = None):
         print(f"Current GPU memory usage: {get_gpu_memory():.2f}GB", flush=True)
         
         if check_model_cache(repo):
-            print(f"Loading {repo} from cache...", flush=True)
+            print(f"Loading {repo} from local cache...", flush=True)
         else:
             print(f"Model {repo} not found in cache.", flush=True)
             print("Starting first-time download process...", flush=True)
@@ -137,7 +136,7 @@ def get_llasa_model(model_choice: str, hf_api_key: str = None):
             quantization_config=quantization_config,
             low_cpu_mem_usage=True,
             use_auth_token=hf_api_key,
-            torch_dtype=torch.float16  # Ensure consistent dtype throughout
+            torch_dtype=torch.float16
         )
         torch.cuda.empty_cache()  # Clear any temporary GPU memory
         print(f"{model_choice} model loaded successfully! (GPU memory: {get_gpu_memory():.2f}GB)", flush=True)
@@ -150,21 +149,24 @@ def get_llasa_model(model_choice: str, hf_api_key: str = None):
 #                           MODEL LOADING FUNCTIONS                           #
 ###############################################################################
 
-# Global variables to store loaded models
 Codec_model = None
 whisper_turbo_pipe = None
 
 def check_model_cache(model_id):
-    """Check if a model exists in the HuggingFace cache."""
-    cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
-    # Convert model_id to cache path format
-    cache_path = os.path.join(cache_dir, model_id.replace("/", "--"))
+    """
+    Check if a model exists in the HuggingFace cache.
+    For most local clones, HF uses 'models--ORG--REPO' in .cache/huggingface/hub/
+    """
+    hub_dir = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
+    subdir = "models--" + model_id.replace("/", "--")
+    cache_path = os.path.join(hub_dir, subdir)
     return os.path.exists(cache_path)
 
 def get_gpu_memory():
     """Get current GPU memory usage in GB."""
     if torch.cuda.is_available():
         return torch.cuda.memory_allocated() / 1024**3
+    return 0.0
 
 def initialize_models():
     """Initialize all required models with progress feedback."""
@@ -173,7 +175,7 @@ def initialize_models():
     print("Step 1/3: Preparing XCodec2 model...", flush=True)
     model_path = "srinivasbilla/xcodec2"
     if check_model_cache(model_path):
-        print(f"Loading XCodec2 model from cache...", flush=True)
+        print(f"Loading XCodec2 model from local cache...", flush=True)
     else:
         print(f"Model {model_path} not found in cache.", flush=True)
         print("Starting first-time download process...", flush=True)
@@ -191,7 +193,7 @@ def initialize_models():
     print("\nStep 2/3: Preparing Whisper model...", flush=True)
     whisper_model = "openai/whisper-large-v3-turbo"
     if check_model_cache(whisper_model):
-        print(f"Loading Whisper model from cache...", flush=True)
+        print(f"Loading Whisper model from local cache...", flush=True)
     else:
         print(f"Model {whisper_model} not found in cache.", flush=True)
         print("Starting first-time download process...", flush=True)
@@ -205,7 +207,7 @@ def initialize_models():
         model=whisper_model,
         torch_dtype=torch.float16,
         device='cuda',
-        model_kwargs={"use_cache": True}  # Enable caching for better performance
+        model_kwargs={"use_cache": True}
     )
     torch.cuda.empty_cache()  # Clear any temporary GPU memory
     print(f"Whisper model loaded successfully! (GPU memory: {get_gpu_memory():.2f}GB)")
@@ -236,7 +238,7 @@ def extract_speech_ids(speech_tokens_str):
 def generate_audio_data_url(audio_np, sample_rate=16000, format='WAV'):
     """
     Encode the NumPy audio array into a base64 data URL so it can be embedded 
-    directly in HTML <audio> tags. Ensures proper audio format conversion.
+    directly in HTML <audio> tags.
     """
     # Convert to float32 in range [-1, 1] if not already
     if audio_np.dtype != np.float32:
@@ -255,29 +257,21 @@ def generate_audio_data_url(audio_np, sample_rate=16000, format='WAV'):
 def render_previous_generations(history_list, is_generating=False):
     """
     Generate an HTML string with a modern, clean layout for previous generations.
-    Displays newest first. Shows a skeleton loader when generating.
+    Displays newest first. Shows a skeleton loader if generating.
     """
+    # If there is no history and we're not generating, show an empty message.
     if not history_list and not is_generating:
         return "<div style='color: #999; font-style: italic;'>No previous generations yet.</div>"
-
-    html = """
-    <div style="display: flex; flex-direction: column; gap: 1rem;">
-    """
     
-    # Add skeleton loader if generation is in progress
-    if is_generating:
-        skeleton_html = """
-        <div class="skeleton-loader">
-            <div class="skeleton-title"></div>
-            <div class="skeleton-text"></div>
-            <div class="skeleton-text" style="width: 70%;"></div>
-            <div class="skeleton-audio"></div>
-        </div>
-        """
-        html += skeleton_html
-
-    html += """
+    # Start with our style block.
+    html = """
     <style>
+    /* Remove Gradio footer link */
+    #footer, .gradio-container a[target="_blank"] {
+        display: none !important;
+    }
+
+    /* Audio controls styling within history */
     .audio-controls {
         width: 100%;
         margin-top: 8px;
@@ -305,31 +299,83 @@ def render_previous_generations(history_list, is_generating=False):
     .audio-controls audio::-webkit-media-controls-timeline {
         background-color: #4A4B6F;
     }
+
+    /* Skeleton Loader Animation */
+    @keyframes shimmer {
+        0% { background-position: -1000px 0; }
+        100% { background-position: 1000px 0; }
+    }
+    .skeleton-loader {
+        background: #33344D;
+        border-radius: 8px;
+        padding: 1rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        margin-bottom: 1rem;
+    }
+    .skeleton-loader .skeleton-title {
+        height: 24px;
+        width: 120px;
+        background: linear-gradient(90deg, #38395A 25%, #4A4B6F 50%, #38395A 75%);
+        background-size: 1000px 100%;
+        animation: shimmer 2s infinite linear;
+        border-radius: 4px;
+        margin-bottom: 12px;
+    }
+    .skeleton-loader .skeleton-text {
+        height: 16px;
+        width: 100%;
+        background: linear-gradient(90deg, #38395A 25%, #4A4B6F 50%, #38395A 75%);
+        background-size: 1000px 100%;
+        animation: shimmer 2s infinite linear;
+        border-radius: 4px;
+        margin: 8px 0;
+    }
+    .skeleton-loader .skeleton-audio {
+        height: 48px;
+        width: 100%;
+        background: linear-gradient(90deg, #38395A 25%, #4A4B6F 50%, #38395A 75%);
+        background-size: 1000px 100%;
+        animation: shimmer 2s infinite linear;
+        border-radius: 4px;
+        margin-top: 12px;
+    }
     </style>
-    <div style="display: flex; flex-direction: column; gap: 1rem;">
     """
 
-    for entry in reversed(history_list):
-        text = entry["text"]
-        audio_url = entry["audio_url"]
-        mode = entry["mode"]
-        temperature = entry["temperature"]
-        top_p = entry["top_p"]
-        max_length = entry["max_length"]
-
-        card_html = f"""
-        <div style="background: #33344D; border-radius: 8px; padding: 1rem; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
-            <h3 style="margin: 0; font-size: 1.1rem;">Mode: {mode}</h3>
-            <p style="margin: 0.5rem 0;"><strong>Text:</strong> {text}</p>
-            <p style="margin: 0.5rem 0;"><strong>Params:</strong> max_len={max_length}, temp={temperature}, top_p={top_p}{', seed=' + str(entry.get('seed')) if entry.get('seed') is not None else ''}</p>
-            <div class="audio-controls">
-                <audio controls src="{audio_url}"></audio>
-            </div>
+    # If we are generating, show the skeleton loader at the top.
+    if is_generating:
+        html += """
+        <div class="skeleton-loader">
+            <div class="skeleton-title"></div>
+            <div class="skeleton-text"></div>
+            <div class="skeleton-text" style="width: 70%;"></div>
+            <div class="skeleton-audio"></div>
         </div>
         """
-        html += card_html
 
-    html += "</div>"
+    # If there is any history, render it below.
+    if history_list:
+        html += "<div style='display: flex; flex-direction: column; gap: 1rem;'>"
+        for entry in reversed(history_list):
+            text = entry["text"]
+            audio_url = entry["audio_url"]
+            mode = entry["mode"]
+            temperature = entry["temperature"]
+            top_p = entry["top_p"]
+            max_length = entry["max_length"]
+            card_html = f"""
+            <div style="background: #33344D; border-radius: 8px; padding: 1rem; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
+                <h3 style="margin: 0; font-size: 1.1rem;">Mode: {mode}</h3>
+                <p style="margin: 0.5rem 0;"><strong>Text:</strong> {text}</p>
+                <p style="margin: 0.5rem 0;"><strong>Params:</strong> max_len={max_length}, temp={temperature}, top_p={top_p}{', seed=' + str(entry.get('seed')) if entry.get('seed') is not None else ''}</p>
+                <div class="audio-controls">
+                    <audio controls src="{audio_url}"></audio>
+                </div>
+            </div>
+            """
+            html += card_html
+        html += "</div>"
+
     return html
 
 ###############################################################################
@@ -356,13 +402,22 @@ def infer(
     temperature,             # Generation param
     top_p,                   # Generation param
     whisper_language,        # Language for Whisper transcription
-    seed,                    # Random seed for reproducible generation
+    user_seed,               # Random seed from user
+    random_seed_each_gen,    # If True, override seed with a fresh random
+    beam_search_enabled,     # If True, use beam search
     prev_history,            # The stored history in State
     progress=gr.Progress()
 ):
-    # Set seed if provided
-    set_seed(seed)
-    # If user doesn't supply an API key in the UI, try environment variable
+    # If "Random seed each generation" is checked, override the user seed:
+    if random_seed_each_gen:
+        chosen_seed = random.randint(0, 2**31 - 1)
+    else:
+        chosen_seed = user_seed
+    
+    # Set seed if we have one
+    set_seed(chosen_seed)
+
+    # If user doesn't supply an API key, try environment variable
     if not hf_api_key or not hf_api_key.strip():
         env_key = os.environ.get(HF_KEY_ENV_VAR, "").strip()
         if env_key:
@@ -376,6 +431,16 @@ def infer(
     elif len(target_text) > 1000:
         gr.warning("Text is too long. Truncating to 1000 characters.")
         target_text = target_text[:1000]
+
+    # ------------------------------------------------------------------------
+    #      AUTO OPTIMIZATION for short text to prevent over-hallucination
+    # ------------------------------------------------------------------------
+    # If the user set a large max_length (like 1024) but the text is short,
+    # forcibly clamp it to 512 for shorter texts. This is a basic heuristic.
+    if len(target_text) < 256 and max_length > 512:
+        old_val = max_length
+        max_length = 512
+        print(f"Auto optimizing: reducing max_length from {old_val} to {max_length} for short text (<256 chars)")
 
     # If we have a reference mode, gather a prefix
     speech_ids_prefix = []
@@ -403,6 +468,7 @@ def infer(
         # Encode the reference audio into speech tokens
         with torch.no_grad():
             vq_code_prompt = Codec_model.encode_code(input_waveform=prompt_wav)
+            # shape: [batch=1, group=1, time_codes]
             vq_code_prompt = vq_code_prompt[0, 0, :]
             speech_ids_prefix = ids_to_speech_tokens(vq_code_prompt)
     elif generation_mode == "Reference audio" and not ref_audio_path:
@@ -418,8 +484,13 @@ def infer(
         {"role": "assistant", "content": "<|SPEECH_GENERATION_START|>" + prefix_str},
     ]
 
+    # Decide how many beams
+    num_beams = 2 if beam_search_enabled else 1
+
+    # Turn early_stopping off if we have only 1 beam, to silence the HF warning
+    early_stopping_val = (num_beams > 1)
+
     with torch.no_grad():
-        # Create input tensors with attention mask
         model_inputs = tokenizer.apply_chat_template(
             chat,
             tokenize=True,
@@ -435,21 +506,24 @@ def infer(
         outputs = model.generate(
             input_ids,
             attention_mask=attention_mask,
-            pad_token_id=tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id,
+            pad_token_id=(
+                tokenizer.pad_token_id if tokenizer.pad_token_id is not None 
+                else tokenizer.eos_token_id
+            ),
             max_length=int(max_length),
-            min_length=int(max_length * 0.5),  # Ensure at least half of max_length is generated
+            min_length=int(max_length * 0.5),
             eos_token_id=speech_end_id,
             do_sample=True,
-            num_beams=2,  # Use beam search but with fewer beams for efficiency
-            length_penalty=1.5,  # Encourage longer sequences
+            num_beams=num_beams,
+            length_penalty=1.5,
             temperature=float(temperature),
             top_p=float(top_p),
-            repetition_penalty=1.2,  # Penalize repetition
-            early_stopping=True,  # Allow early stopping for efficiency
-            no_repeat_ngram_size=3,  # Prevent exact 3-gram repetitions
+            repetition_penalty=1.2,
+            early_stopping=early_stopping_val,
+            no_repeat_ngram_size=3,
         )
 
-        # The portion we want is from the end of the prompt (minus the prefix) to the second-last token
+        # Extract the generated speech IDs
         prefix_len = len(speech_ids_prefix)
         generated_ids = outputs[0][(input_ids.shape[1] - prefix_len) : -1]
         speech_tokens = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
@@ -459,7 +533,7 @@ def infer(
         # Decode the tokens to a waveform
         gen_wav = Codec_model.decode_code(speech_tokens)
 
-        # Remove the reference prompt from the final audio if needed
+        # If we had a reference prefix, remove that portion from final wave
         if speech_ids_prefix:
             gen_wav = gen_wav[:, :, prompt_wav.shape[1]:]
 
@@ -477,15 +551,12 @@ def infer(
         "temperature": temperature,
         "top_p": top_p,
         "max_length": max_length,
-        "seed": seed,  # Track seed in history
+        "seed": chosen_seed,
     }
     if len(prev_history) >= MAX_HISTORY:
         prev_history.pop(0)
     prev_history.append(new_entry)
 
-    updated_dashboard_html = render_previous_generations(prev_history)
-
-    # Return new audio, updated history HTML, and state
     updated_dashboard_html = render_previous_generations(prev_history, is_generating=False)
     return (sr, out_audio_np), updated_dashboard_html, prev_history
 
@@ -493,56 +564,13 @@ def infer(
 #                             NEW DASHBOARD UI                                #
 ###############################################################################
 
-# New CSS for a clean, modern dashboard with a top header and two panels.
 NEW_CSS = """
 /* Remove Gradio branding/footer */
-#footer, .gradio-container a[target="_blank"] { display: none; }
-
-/* Skeleton Loader Animation */
-@keyframes shimmer {
-    0% { background-position: -1000px 0; }
-    100% { background-position: 1000px 0; }
+#footer, .gradio-container a[target="_blank"] { 
+    display: none; 
 }
 
-.skeleton-loader {
-    background: #33344D;
-    border-radius: 8px;
-    padding: 1rem;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-    margin-bottom: 1rem;
-}
-
-.skeleton-loader .skeleton-title {
-    height: 24px;
-    width: 120px;
-    background: linear-gradient(90deg, #38395A 25%, #4A4B6F 50%, #38395A 75%);
-    background-size: 1000px 100%;
-    animation: shimmer 2s infinite linear;
-    border-radius: 4px;
-    margin-bottom: 12px;
-}
-
-.skeleton-loader .skeleton-text {
-    height: 16px;
-    width: 100%;
-    background: linear-gradient(90deg, #38395A 25%, #4A4B6F 50%, #38395A 75%);
-    background-size: 1000px 100%;
-    animation: shimmer 2s infinite linear;
-    border-radius: 4px;
-    margin: 8px 0;
-}
-
-.skeleton-loader .skeleton-audio {
-    height: 48px;
-    width: 100%;
-    background: linear-gradient(90deg, #38395A 25%, #4A4B6F 50%, #38395A 75%);
-    background-size: 1000px 100%;
-    animation: shimmer 2s infinite linear;
-    border-radius: 4px;
-    margin-top: 12px;
-}
-
-/* Global styles */
+/* Simple dark background */
 body, .gradio-container {
     margin: 0;
     padding: 0;
@@ -568,25 +596,22 @@ body, .gradio-container {
     flex-direction: row;
     gap: 1rem;
     padding: 1rem 2rem;
-    height: calc(100vh - 80px);  /* Adjust for header height */
 }
 
-/* Synthesis panel styling */
+/* Synthesis panel */
 #synthesis-panel {
     flex: 2;
     background-color: #222233;
     border-radius: 8px;
     padding: 1.5rem;
-    overflow-y: auto;
 }
 
-/* History panel styling */
+/* History panel */
 #history-panel {
     flex: 1;
     background-color: #222233;
     border-radius: 8px;
     padding: 1.5rem;
-    overflow-y: auto;
 }
 
 /* Form elements styling */
@@ -598,98 +623,12 @@ body, .gradio-container {
     padding: 0.5rem;
 }
 
-/* Button styling */
-button, .gr-button {
-    background-color: #3F61EF;
-    color: #fff;
-    border: none;
-    border-radius: 4px;
-    padding: 0.5rem 1rem;
-    cursor: pointer;
-}
-button:hover, .gr-button:hover {
-    background-color: #2F51DF;
-}
-
-/* History card styling */
-.card-grid {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-}
-.card {
-    background-color: #33344D;
-    border-radius: 8px;
-    padding: 1rem;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
-.card h3 { margin: 0; font-size: 1.1rem; }
-.card p { margin: 0.5rem 0; font-size: 0.9rem; }
-.empty-msg { font-size: 0.9rem; color: #999; font-style: italic; }
-
-/* Audio component styling */
+/* Audio components */
 .audio-input, .audio-output {
     background-color: #2E2F46 !important;
     border-radius: 8px !important;
     padding: 12px !important;
     margin: 8px 0 !important;
-}
-
-/* Audio controls container */
-.audio-input > div, .audio-output > div {
-    display: flex !important;
-    align-items: center !important;
-    gap: 8px !important;
-    padding: 8px !important;
-    background-color: #38395A !important;
-    border-radius: 4px !important;
-}
-
-/* Audio buttons */
-.audio-input button, .audio-output button {
-    background-color: #3F61EF !important;
-    color: white !important;
-    border: none !important;
-    border-radius: 4px !important;
-    padding: 8px !important;
-    min-width: 32px !important;
-    height: 32px !important;
-    display: flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-    cursor: pointer !important;
-    margin: 0 4px !important;
-}
-
-/* Button hover state */
-.audio-input button:hover, .audio-output button:hover {
-    background-color: #2F51DF !important;
-}
-
-/* Audio progress bar */
-.audio-input input[type="range"], .audio-output input[type="range"] {
-    flex: 1 !important;
-    height: 4px !important;
-    background-color: #4A4B6F !important;
-    border-radius: 2px !important;
-    margin: 0 8px !important;
-}
-
-/* Time display */
-.audio-input .time, .audio-output .time {
-    color: #EAEAEA !important;
-    font-size: 14px !important;
-    min-width: 60px !important;
-    text-align: center !important;
-}
-
-/* Ensure icons are visible */
-.audio-input button svg, .audio-output button svg {
-    width: 16px !important;
-    height: 16px !important;
-    fill: currentColor !important;
-    opacity: 1 !important;
-    visibility: visible !important;
 }
 """
 
@@ -705,16 +644,16 @@ def build_dashboard():
         background_fill_primary="#1E1E2A",
         background_fill_secondary="#222233",
         border_color_primary="#4A4B6F",
-        button_primary_background_fill="#3F61EF",
-        button_primary_background_fill_hover="#2F51DF",
-        button_primary_text_color="white",
+        button_primary_background_fill=None,
+        button_primary_background_fill_hover=None,
+        button_primary_text_color=None,
         body_text_color="#EAEAEA",
         block_title_text_color="#EAEAEA",
         block_label_text_color="#EAEAEA",
         input_background_fill="#38395A",
     )
 
-    with gr.Blocks(theme=theme) as demo:
+    with gr.Blocks(theme=theme, css=NEW_CSS) as demo:
         # Top header
         gr.Markdown("<div id='header'><h1>Llasa TTS Dashboard</h1></div>", elem_id="header")
         
@@ -739,7 +678,6 @@ def build_dashboard():
                         sources=["upload", "microphone"],
                         type="filepath",
                         interactive=True,
-                        elem_classes="audio-component"
                     )
                 trim_audio_checkbox = gr.Checkbox(
                     label="Trim Reference Audio to 15s?",
@@ -753,7 +691,7 @@ def build_dashboard():
                 with gr.Accordion("Advanced Generation Settings", open=False):
                     max_length_slider = gr.Slider(
                         minimum=64, maximum=4096, value=1024, step=64,
-                        label="Max Length (tokens) - Higher values allow longer audio generation"
+                        label="Max Length (tokens)"
                     )
                     temperature_slider = gr.Slider(
                         minimum=0.1, maximum=2.0, value=1.0, step=0.1,
@@ -765,12 +703,32 @@ def build_dashboard():
                     )
                     whisper_language = gr.Dropdown(
                         label="Whisper Language (for reference audio)",
-                        choices=["en", "auto", "ja", "zh", "de", "es", "ru", "ko", "fr", "pt", "tr", "pl", "ca", "nl", "ar", "sv", "it", "id", "hi", "fi", "vi", "he", "uk", "el", "ms", "cs", "ro", "da", "hu", "ta", "no", "th", "ur", "hr", "bg", "lt", "la", "mi", "ml", "jw", "bn", "et", "sr", "sk", "sl", "sw", "af", "fa", "am", "mr", "cy", "gu", "is", "mk", "be", "ne", "si", "kn", "az", "tl", "lv", "mt", "ga", "eu", "gl", "hy", "ka", "lb", "sq", "my", "yi", "bs", "km", "kk", "mn", "sd", "su", "ps", "ky", "ku", "uz", "bo", "sa", "tk", "sh", "yo", "mg", "ha", "as", "ny", "so", "pa", "ka", "te", "tg", "ug", "zu", "sn", "ig", "xh", "st", "tn", "ak", "ht", "ln", "om", "rw", "ti", "gd", "oc", "kw", "br", "fo", "fy", "mi", "qu", "rm", "sc", "gn", "ay", "tt", "cv", "iu", "dv", "or", "lo", "ks", "wo", "ba", "ce", "na", "co", "sm", "bi", "to", "ty", "ss", "sg", "tw", "ff", "dz", "aa", "nn", "nv", "kl", "ki", "ve", "ng", "cr", "ee", "ab", "av", "os", "sc", "li", "ia", "ie", "ik", "io", "vo", "za"],
+                        choices=["en", "auto", "ja", "zh", "de", "es", "ru", "ko", "fr", "pt", "tr", "pl", "ca", 
+                                 "nl", "ar", "sv", "it", "id", "hi", "fi", "vi", "he", "uk", "el", "ms", "cs", 
+                                 "ro", "da", "hu", "ta", "no", "th", "ur", "hr", "bg", "lt", "la", "mi", "ml", 
+                                 "jw", "bn", "et", "sr", "sk", "sl", "sw", "af", "fa", "am", "mr", "cy", "gu", 
+                                 "is", "mk", "be", "ne", "si", "kn", "az", "tl", "lv", "mt", "ga", "eu", "gl", 
+                                 "hy", "ka", "lb", "sq", "my", "yi", "bs", "km", "kk", "mn", "sd", "su", "ps", 
+                                 "ky", "ku", "uz", "bo", "sa", "tk", "sh", "yo", "mg", "ha", "as", "ny", "so", 
+                                 "pa", "te", "tg", "ug", "zu", "sn", "ig", "xh", "st", "tn", "ak", "ht", "ln", 
+                                 "om", "rw", "ti", "gd", "oc", "kw", "br", "fo", "fy", "qu", "rm", "sc", "gn", 
+                                 "ay", "tt", "cv", "iu", "dv", "or", "lo", "ks", "wo", "ba", "ce", "na", "co", 
+                                 "sm", "bi", "to", "ty", "ss", "sg", "tw", "ff", "dz", "aa", "nn", "nv", "kl", 
+                                 "ki", "ve", "ng", "cr", "ee", "ab", "av", "os", "sc", "li", "ia", "ie", "ik", 
+                                 "io", "vo", "za"],
                         value="en",
                         type="value"
                     )
+                    random_seed_checkbox = gr.Checkbox(
+                        label="Random seed each generation",
+                        value=True
+                    )
+                    beam_search_checkbox = gr.Checkbox(
+                        label="Enable beam search",
+                        value=False
+                    )
                     seed_number = gr.Number(
-                        label="Random Seed (optional, for reproducible generation)",
+                        label="Seed (only used if Random seed is disabled)",
                         value=None,
                         precision=0,
                         minimum=0,
@@ -778,19 +736,20 @@ def build_dashboard():
                         step=1
                     )
                 api_key_input = gr.Textbox(
-                    label="Hugging Face API Key (Optional, but needed for 8B model)",
+                    label="Hugging Face API Key (Optional, but required for 8B)",
                     type="password",
                     placeholder="Enter your HF token or leave blank"
                 )
                 generate_btn = gr.Button("Synthesize", variant="primary")
+
                 with gr.Group():
                     audio_output = gr.Audio(
                         label="Synthesized Audio",
                         type="numpy",
-                        interactive=True,
+                        interactive=False,
+                        sources=None,  
                         show_label=True,
-                        autoplay=False,
-                        elem_classes="audio-component"
+                        autoplay=False
                     )
             
             with gr.Column(elem_id="history-panel"):
@@ -822,6 +781,8 @@ def build_dashboard():
                 top_p_slider,
                 whisper_language,
                 seed_number,
+                random_seed_checkbox,
+                beam_search_checkbox,
                 prev_history_state
             ],
             outputs=[audio_output, dashboard_html, prev_history_state],
