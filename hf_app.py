@@ -1,17 +1,58 @@
+print("Initializing system...", flush=True)
+
+# Core Python imports
 import os
 import io
+import sys
 import base64
 import tempfile
 import argparse
 import numpy as np
 import random
 
+print("Checking CUDA availability...", flush=True)
 import torch
+if not torch.cuda.is_available():
+    print("ERROR: CUDA is not available. This application requires a CUDA-capable GPU.")
+    sys.exit(1)
+print(f"CUDA is available. Using device: {torch.cuda.get_device_name()}", flush=True)
+
+print("Initializing CUDA backend...", flush=True)
+# Force CUDA initialization
+torch.cuda.init()
+_ = torch.zeros(1).cuda()
+print("CUDA initialized successfully", flush=True)
+
+print("Loading audio libraries...", flush=True)
 import torchaudio
 import soundfile as sf
 import gradio as gr
 
+print("Configuring HuggingFace environment...", flush=True)
+cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "huggingface")
+os.makedirs(cache_dir, exist_ok=True)
+
+# Configure HuggingFace environment for better progress reporting
+os.environ['HF_HOME'] = cache_dir  # New recommended way to set cache directory
+os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = "1"
+os.environ['TOKENIZERS_PARALLELISM'] = "true"
+os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = "0"
+os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = "1"  # Suppress deprecation warnings
+
+print("Loading ML libraries...", flush=True)
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig
+from transformers import logging as transformers_logging
+from transformers.utils import move_cache
+
+# Pre-initialize transformers
+print("Pre-initializing transformers library...", flush=True)
+try:
+    move_cache()  # Ensure cache is properly initialized
+    print("Cache migration completed if needed", flush=True)
+except Exception as e:
+    print(f"Cache migration skipped: {e}", flush=True)
+
+print("Loading codec model...", flush=True)
 from xcodec2.modeling_xcodec2 import XCodec2Model
 
 ###############################################################################
@@ -51,8 +92,22 @@ def get_llasa_model(model_choice: str, hf_api_key: str = None):
         else:
             repo = "srinivasbilla/llasa-3b"  # fallback
 
-        print(f"Loading model/tokenizer from {repo} with API key: {hf_api_key or 'NONE'}")
+        print(f"Preparing to load {repo}...", flush=True)
+        print(f"Current GPU memory usage: {get_gpu_memory():.2f}GB", flush=True)
+        
+        if not check_model_cache(repo):
+            print(f"Downloading {repo} model and tokenizer (this may take several minutes)...", flush=True)
+            print("Note: First-time downloads can be slow due to model size.", flush=True)
+            print("Downloading model files...", flush=True)
+        else:
+            print(f"Loading {repo} from cache...", flush=True)
+
+        print("Loading tokenizer...", flush=True)
         tokenizer = AutoTokenizer.from_pretrained(repo, use_auth_token=hf_api_key)
+        print("Tokenizer loaded successfully!", flush=True)
+        
+        print(f"Loading {model_choice} model into memory (this may take a moment)...", flush=True)
+        print("Note: Loading large models can take several minutes on first run.", flush=True)
         model = AutoModelForCausalLM.from_pretrained(
             repo,
             trust_remote_code=True,
@@ -62,25 +117,69 @@ def get_llasa_model(model_choice: str, hf_api_key: str = None):
             use_auth_token=hf_api_key,
             torch_dtype=torch.float16  # Ensure consistent dtype throughout
         )
+        torch.cuda.empty_cache()  # Clear any temporary GPU memory
+        print(f"{model_choice} model loaded successfully! (GPU memory: {get_gpu_memory():.2f}GB)", flush=True)
+        
         loaded_tokenizers[model_choice] = tokenizer
         loaded_models[model_choice] = model
     return loaded_tokenizers[model_choice], loaded_models[model_choice]
 
 ###############################################################################
-#                           MODEL LOADING (STATIC)                            #
+#                           MODEL LOADING FUNCTIONS                           #
 ###############################################################################
 
-model_path = "srinivasbilla/xcodec2"
-Codec_model = XCodec2Model.from_pretrained(model_path)
-Codec_model.eval().cuda()
+# Global variables to store loaded models
+Codec_model = None
+whisper_turbo_pipe = None
 
-# Initialize whisper pipeline with minimal configuration
-whisper_turbo_pipe = pipeline(
-    "automatic-speech-recognition",
-    model="openai/whisper-large-v3-turbo",
-    torch_dtype=torch.float16,
-    device='cuda'
-)
+def check_model_cache(model_id):
+    """Check if a model exists in the HuggingFace cache."""
+    cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
+    # Convert model_id to cache path format
+    cache_path = os.path.join(cache_dir, model_id.replace("/", "--"))
+    if not os.path.exists(cache_path):
+        print(f"Model {model_id} not found in cache.", flush=True)
+        print("Starting first-time download process...", flush=True)
+        print("Note: Initial downloads can take several minutes depending on your internet speed.", flush=True)
+        print("The system is actively downloading. You will see progress updates shortly...", flush=True)
+        print("(If this is your first run, multiple models need to be downloaded)", flush=True)
+        return False
+    print(f"Model {model_id} found in cache.", flush=True)
+    return True
+
+def get_gpu_memory():
+    """Get current GPU memory usage in GB."""
+    if torch.cuda.is_available():
+        return torch.cuda.memory_allocated() / 1024**3
+
+def initialize_models():
+    """Initialize all required models with progress feedback."""
+    global Codec_model, whisper_turbo_pipe
+    
+    print("Step 1/3: Preparing XCodec2 model...", flush=True)
+    model_path = "srinivasbilla/xcodec2"
+    if not check_model_cache(model_path):
+        print(f"Downloading {model_path} (this may take a few minutes)...", flush=True)
+    print("Loading XCodec2 model into memory...", flush=True)
+    Codec_model = XCodec2Model.from_pretrained(model_path)
+    print("Moving XCodec2 model to GPU and optimizing...", flush=True)
+    Codec_model.eval().cuda()
+    torch.cuda.empty_cache()  # Clear any temporary GPU memory
+    print(f"XCodec2 model loaded successfully! (GPU memory: {get_gpu_memory():.2f}GB)")
+    
+    print("\nStep 2/3: Preparing Whisper model...", flush=True)
+    whisper_model = "openai/whisper-large-v3-turbo"
+    if not check_model_cache(whisper_model):
+        print(f"Downloading {whisper_model} (this may take a few minutes)...", flush=True)
+    print("Loading Whisper model and preparing pipeline...", flush=True)
+    whisper_turbo_pipe = pipeline(
+        "automatic-speech-recognition",
+        model=whisper_model,
+        torch_dtype=torch.float16,
+        device='cuda'
+    )
+    torch.cuda.empty_cache()  # Clear any temporary GPU memory
+    print(f"Whisper model loaded successfully! (GPU memory: {get_gpu_memory():.2f}GB)")
 
 ###############################################################################
 #                             UTILITY FUNCTIONS                               #
@@ -703,6 +802,14 @@ def main():
     parser.add_argument("--share", help="Enable gradio share", action="store_true")
     args = parser.parse_args()
 
+    print("Step 1/3: Loading XCodec2 and Whisper models...", flush=True)
+    initialize_models()
+    
+    print("\nStep 2/3: Pre-loading Llasa 3B model...", flush=True)
+    get_llasa_model("3B")  # Load default 3B model without API key
+    print("Llasa 3B model loaded successfully!")
+    
+    print("\nStep 3/3: Starting Gradio interface...", flush=True)
     app = build_dashboard()
     app.launch(
         share=args.share,
@@ -711,4 +818,5 @@ def main():
     )
 
 if __name__ == "__main__":
+    print("\n=== Llasa TTS Dashboard ===", flush=True)
     main()
