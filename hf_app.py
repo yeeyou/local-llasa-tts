@@ -79,11 +79,30 @@ quantization_config = BitsAndBytesConfig(
 loaded_models = {}
 loaded_tokenizers = {}
 
+def unload_model(model_choice: str):
+    """
+    Explicitly unload a model from GPU memory and clear it from the cache.
+    """
+    if model_choice in loaded_models:
+        print(f"Unloading {model_choice} model from GPU...", flush=True)
+        if hasattr(loaded_models[model_choice], 'cpu'):
+            loaded_models[model_choice].cpu()
+        del loaded_models[model_choice]
+        if model_choice in loaded_tokenizers:
+            del loaded_tokenizers[model_choice]
+        torch.cuda.empty_cache()
+        print(f"{model_choice} model unloaded successfully!", flush=True)
+
 def get_llasa_model(model_choice: str, hf_api_key: str = None):
     """
     Load and cache the specified model (3B or 8B). 
     If an API key is provided, it will be used to authenticate with Hugging Face.
     """
+    # Unload other models before loading the requested one
+    for existing_model in list(loaded_models.keys()):
+        if existing_model != model_choice:
+            unload_model(existing_model)
+    
     if model_choice not in loaded_models:
         if model_choice == "3B":
             repo = "srinivasbilla/llasa-3b"
@@ -733,7 +752,7 @@ def build_dashboard():
                 )
                 with gr.Accordion("Advanced Generation Settings", open=False):
                     max_length_slider = gr.Slider(
-                        minimum=64, maximum=4096, value=2048, step=64,
+                        minimum=64, maximum=4096, value=1024, step=64,
                         label="Max Length (tokens) - Higher values allow longer audio generation"
                     )
                     temperature_slider = gr.Slider(
