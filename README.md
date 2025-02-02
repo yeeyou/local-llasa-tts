@@ -9,7 +9,7 @@ A powerful, local text-to-speech system powered by Llasa-tts models with a moder
 **Llasa TTS Dashboard** transforms the traditional TTS pipeline into a user-friendly, robust application. Key improvements include:
 
 - **Revamped Dashboard UI:** A sleek, two-panel interface for synthesis and history, built with Gradio.
-- **Multi-Model Support:** Easily switch between 3B and 8B models (the 1B model is available but not fully tested).
+- **Multi-Model Support:** Easily switch between 3B and 8B models.
 - **Enhanced Inference Options:** Generate speech from plain text or using a reference audio prompt.
 - **Optimized Performance:** Model caching, efficient CUDA initialization, and precise GPU memory management ensure smooth performance.
 - **Advanced Generation Controls:** Adjust parameters such as max length, temperature, top-p, and set a random seed for reproducibility.
