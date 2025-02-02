@@ -3,6 +3,7 @@ import io
 import base64
 import tempfile
 import argparse
+import numpy as np
 
 import torch
 import torchaudio
@@ -25,8 +26,12 @@ history_data = []
 # Optional environment variable for the HF API key
 HF_KEY_ENV_VAR = "LLASA_API_KEY"
 
-# Use quantization to reduce memory usage
-quantization_config = BitsAndBytesConfig(load_in_4bit=True)
+# Use quantization to reduce memory usage and ensure compute dtype matches input
+quantization_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_compute_dtype=torch.float16,
+    bnb_4bit_use_double_quant=True
+)
 
 # In-memory caches for loaded models/tokenizers
 loaded_models = {}
@@ -53,7 +58,8 @@ def get_llasa_model(model_choice: str, hf_api_key: str = None):
             device_map='cuda',
             quantization_config=quantization_config,
             low_cpu_mem_usage=True,
-            use_auth_token=hf_api_key
+            use_auth_token=hf_api_key,
+            torch_dtype=torch.float16  # Ensure consistent dtype throughout
         )
         loaded_tokenizers[model_choice] = tokenizer
         loaded_models[model_choice] = model
@@ -71,7 +77,7 @@ whisper_turbo_pipe = pipeline(
     "automatic-speech-recognition",
     model="openai/whisper-large-v3-turbo",
     torch_dtype=torch.float16,
-    device='cuda',
+    device='cuda'
 )
 
 ###############################################################################
@@ -100,22 +106,47 @@ def extract_speech_ids(speech_tokens_str):
 def generate_audio_data_url(audio_np, sample_rate=16000, format='WAV'):
     """
     Encode the NumPy audio array into a base64 data URL so it can be embedded 
-    directly in HTML <audio> tags.
+    directly in HTML <audio> tags. Ensures proper audio format conversion.
     """
+    # Convert to float32 in range [-1, 1] if not already
+    if audio_np.dtype != np.float32:
+        audio_np = audio_np.astype(np.float32)
+    if np.abs(audio_np).max() > 1.0:
+        audio_np = audio_np / np.abs(audio_np).max()
+    
+    # Convert to int16 for WAV format
+    audio_int16 = (audio_np * 32767).astype(np.int16)
+    
     with io.BytesIO() as buf:
-        sf.write(buf, audio_np, sample_rate, format=format)
+        sf.write(buf, audio_int16, sample_rate, format=format, subtype='PCM_16')
         audio_data = base64.b64encode(buf.getvalue()).decode('utf-8')
     return f"data:audio/wav;base64,{audio_data}"
 
-def render_previous_generations(history_list):
+def render_previous_generations(history_list, is_generating=False):
     """
     Generate an HTML string with a modern, clean layout for previous generations.
-    Displays newest first.
+    Displays newest first. Shows a skeleton loader when generating.
     """
-    if not history_list:
+    if not history_list and not is_generating:
         return "<div style='color: #999; font-style: italic;'>No previous generations yet.</div>"
 
     html = """
+    <div style="display: flex; flex-direction: column; gap: 1rem;">
+    """
+    
+    # Add skeleton loader if generation is in progress
+    if is_generating:
+        skeleton_html = """
+        <div class="skeleton-loader">
+            <div class="skeleton-title"></div>
+            <div class="skeleton-text"></div>
+            <div class="skeleton-text" style="width: 70%;"></div>
+            <div class="skeleton-audio"></div>
+        </div>
+        """
+        html += skeleton_html
+
+    html += """
     <style>
     .audio-controls {
         width: 100%;
@@ -302,6 +333,7 @@ def infer(
     updated_dashboard_html = render_previous_generations(prev_history)
 
     # Return new audio, updated history HTML, and state
+    updated_dashboard_html = render_previous_generations(prev_history, is_generating=False)
     return (sr, out_audio_np), updated_dashboard_html, prev_history
 
 ###############################################################################
@@ -312,6 +344,50 @@ def infer(
 NEW_CSS = """
 /* Remove Gradio branding/footer */
 #footer, .gradio-container a[target="_blank"] { display: none; }
+
+/* Skeleton Loader Animation */
+@keyframes shimmer {
+    0% { background-position: -1000px 0; }
+    100% { background-position: 1000px 0; }
+}
+
+.skeleton-loader {
+    background: #33344D;
+    border-radius: 8px;
+    padding: 1rem;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    margin-bottom: 1rem;
+}
+
+.skeleton-loader .skeleton-title {
+    height: 24px;
+    width: 120px;
+    background: linear-gradient(90deg, #38395A 25%, #4A4B6F 50%, #38395A 75%);
+    background-size: 1000px 100%;
+    animation: shimmer 2s infinite linear;
+    border-radius: 4px;
+    margin-bottom: 12px;
+}
+
+.skeleton-loader .skeleton-text {
+    height: 16px;
+    width: 100%;
+    background: linear-gradient(90deg, #38395A 25%, #4A4B6F 50%, #38395A 75%);
+    background-size: 1000px 100%;
+    animation: shimmer 2s infinite linear;
+    border-radius: 4px;
+    margin: 8px 0;
+}
+
+.skeleton-loader .skeleton-audio {
+    height: 48px;
+    width: 100%;
+    background: linear-gradient(90deg, #38395A 25%, #4A4B6F 50%, #38395A 75%);
+    background-size: 1000px 100%;
+    animation: shimmer 2s infinite linear;
+    border-radius: 4px;
+    margin-top: 12px;
+}
 
 /* Global styles */
 body, .gradio-container {
@@ -557,7 +633,15 @@ def build_dashboard():
         # Gradio State to keep track of previous generations
         prev_history_state = gr.State([])
 
+        def show_loading_state(history):
+            """Show skeleton loader immediately when generation starts."""
+            return render_previous_generations(history, is_generating=True)
+
         generate_btn.click(
+            fn=show_loading_state,
+            inputs=[prev_history_state],
+            outputs=[dashboard_html],
+        ).then(
             fn=infer,
             inputs=[
                 generation_mode,
