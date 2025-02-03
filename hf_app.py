@@ -11,6 +11,11 @@ import random
 
 print("Initializing system...", flush=True)
 
+# Check Python version
+if sys.version_info < (3, 10):
+    print("ERROR: Python 3.10 or higher is required to run this application.")
+    sys.exit(1)
+
 # Core Python imports
 import torch
 if not torch.cuda.is_available():
