@@ -85,7 +85,7 @@ def unload_model(model_choice: str):
 
 def get_llasa_model(model_choice: str, hf_api_key: str = None):
     """
-    Load and cache the specified model (3B or 8B).  
+    Load and cache the specified model (3B or 8B).
     If an API key is provided, it is used to authenticate with Hugging Face.
     """
     for existing_model in list(loaded_models.keys()):
@@ -335,10 +335,9 @@ def infer_podcast(
 ):
     """
     Generate podcast audio by synthesizing each line using speaker-specific settings.
-    The speaker_config argument is a dictionary mapping speaker names (case-insensitive) to a dict:
-      { "ref_audio": <filepath or empty string>, "seed": <number or None> }
+    The speaker_config argument is a dictionary mapping speaker names (case-insensitive) to:
+       { "ref_audio": <filepath or empty string>, "seed": <number or None> }
     """
-    # Create a lower-case mapping for matching
     lower_config = {k.lower(): v for k, v in speaker_config.items()}
     conversation, speakers = parse_conversation(conversation_text)
     audio_segments = []
@@ -379,7 +378,8 @@ def infer_podcast(
         prev_history.pop(0)
     prev_history.append(new_entry)
     updated_dashboard_html = render_previous_generations(prev_history, is_generating=False)
-    return (16000, final_audio), transcript_html, prev_history
+    # FIX: Return updated_dashboard_html (full info) instead of transcript_html
+    return (16000, final_audio), updated_dashboard_html, prev_history
 
 ###############################################################################
 #                          MAIN INFERENCE FUNCTION                            #
@@ -588,7 +588,7 @@ def build_dashboard():
                         generation_mode_std = gr.Radio(label="Generation Mode", choices=["Text only", "Reference audio"], value="Text only", type="value")
                         with gr.Group():
                             ref_audio_input = gr.Audio(label="Reference Audio (Optional)", sources=["upload", "microphone"], type="filepath")
-                            trim_audio_checkbox_std = gr.Checkbox(label="Trim Reference Audio to 15s?", value=True)
+                            trim_audio_checkbox_std = gr.Checkbox(label="Trim Reference Audio to 15s?", value=False)
                         gen_text_input = gr.Textbox(label="Text to Generate", lines=4, placeholder="Enter text here...")
                         with gr.Accordion("Advanced Generation Settings", open=False):
                             max_length_slider_std = gr.Slider(minimum=64, maximum=4096, value=1024, step=64, label="Max Length (tokens)")
@@ -620,8 +620,7 @@ def build_dashboard():
                                                         lines=6,
                                                         placeholder="Enter conversation transcript. Each line should be formatted as 'Speaker Name: message'")
                         with gr.Accordion("Speaker Configuration (Add as many as needed)", open=True):
-                            gr.Markdown("Fill in the details for each speaker you expect to appear in the transcript. Leave Speaker Name blank to ignore.")
-                            # For simplicity, we create 3 rows (you can increase this fixed number if desired)
+                            gr.Markdown("Fill in the details for each speaker you expect to appear in the transcript.")
                             speaker1_name = gr.Textbox(label="Speaker 1 Name", placeholder="e.g., Alex")
                             ref_audio_speaker1 = gr.Audio(label="Reference Audio for Speaker 1 (Optional)", sources=["upload", "microphone"], type="filepath")
                             seed_speaker1 = gr.Number(label="Seed for Speaker 1 (Optional)", value=None, precision=0)
@@ -679,7 +678,6 @@ def build_dashboard():
                                speaker1_name, ref_audio_speaker1, seed_speaker1,
                                speaker2_name, ref_audio_speaker2, seed_speaker2,
                                speaker3_name, ref_audio_speaker3, seed_speaker3):
-            # Build a dictionary mapping non-empty speaker names to their configuration.
             speaker_config = {}
             for name, ref, seed in [
                 (speaker1_name, ref_audio_speaker1, seed_speaker1),
