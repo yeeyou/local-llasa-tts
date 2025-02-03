@@ -86,7 +86,7 @@ async def process_tts(audio_path: str, target_text: str):
     try:
         logger.info(f"开始处理音频，目标文本长度：{len(target_text)}")
         waveform, sample_rate = torchaudio.load(audio_path)
-        
+
         if len(waveform[0])/sample_rate > 15:
             logger.info("音频长度超过15秒，将被截断")
             waveform = waveform[:, :sample_rate*15]
@@ -105,7 +105,7 @@ async def process_tts(audio_path: str, target_text: str):
             raise HTTPException(status_code=400, detail="Target text cannot be empty")
         elif len(target_text) > 300:
             target_text = target_text[:300]
-            
+
         input_text = prompt_text + ' ' + target_text
 
         with torch.no_grad():
@@ -121,9 +121,9 @@ async def process_tts(audio_path: str, target_text: str):
             ]
 
             input_ids = tokenizer.apply_chat_template(
-                chat, 
-                tokenize=True, 
-                return_tensors='pt', 
+                chat,
+                tokenize=True,
+                return_tensors='pt',
                 continue_final_message=True
             ).cuda()
 
@@ -133,15 +133,15 @@ async def process_tts(audio_path: str, target_text: str):
                 max_length=2048,
                 eos_token_id=speech_end_id,
                 do_sample=True,
-                top_p=1,           
+                top_p=1,
                 temperature=0.8
             )
 
             generated_ids = outputs[0][input_ids.shape[1]-len(speech_ids_prefix):-1]
-            speech_tokens = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)   
+            speech_tokens = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
             speech_tokens = extract_speech_ids(speech_tokens)
             speech_tokens = torch.tensor(speech_tokens).cuda().unsqueeze(0).unsqueeze(0)
-            gen_wav = Codec_model.decode_code(speech_tokens) 
+            gen_wav = Codec_model.decode_code(speech_tokens)
             gen_wav = gen_wav[:,:,prompt_wav.shape[1]:]
 
             logger.info("语音生成完成")
@@ -165,18 +165,18 @@ async def create_tts(
         logger.info(f"收到新的TTS请求:")
         logger.info(f"音频文件: {audio.filename}")
         logger.info(f"原始文本内容: '{text}'")
-        
+
         # 验证音频文件
         file_extension = Path(audio.filename).suffix.lower()
         if file_extension not in ALLOWED_FORMATS:
             raise HTTPException(
-                status_code=400, 
+                status_code=400,
                 detail=f"不支持的音频格式。支持的格式: {', '.join(ALLOWED_FORMATS)}"
             )
-            
+
         # 验证文本
         text = text.strip()
-        
+
         # 保存上传的音频文件到临时目录
         with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp_audio:
             content = await audio.read()
@@ -186,26 +186,26 @@ async def create_tts(
         try:
             logger.info("开始处理 TTS...")
             audio_array = await process_tts(temp_audio_path, text)
-            
+
             # 使用时间戳创建唯一的输出文件名
             output_filename = f"output_{int(time.time())}.wav"
             output_path = OUTPUT_DIR / output_filename
-            
+
             logger.info(f"生成音频文件: {output_path}")
             import soundfile as sf
             sf.write(str(output_path), audio_array, 16000)
-            
+
             logger.info("TTS 处理完成，返回音频文件")
             return FileResponse(
                 str(output_path),
                 media_type="audio/wav",
                 filename=output_filename
             )
-        
+
         except Exception as e:
             logger.error(f"TTS 处理失败: {str(e)}")
             raise HTTPException(status_code=500, detail=f"TTS 处理失败: {str(e)}")
-            
+
     finally:
         # 只清理临时音频文件
         if temp_audio_path and os.path.exists(temp_audio_path):
@@ -220,11 +220,11 @@ if __name__ == "__main__":
     logger.info(f"输出目录: {OUTPUT_DIR}")
     logger.info("API文档地址: http://localhost:8008/docs")
     print("="*50 + "\n")
-    
+
     uvicorn.run(
-        app, 
-        host="0.0.0.0", 
-        port=8008, 
+        app,
+        host="0.0.0.0",
+        port=8008,
         log_level="info",
         access_log=False  # 禁用访问日志以避免重复
     )
