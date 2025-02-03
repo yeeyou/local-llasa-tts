@@ -9,7 +9,7 @@ async def test_tts_api(audio_path, text):
     output_dir.mkdir(exist_ok=True)
     
     # API端点
-    url = "http://localhost:8008/tts/"
+    url = "http://192.168.1.101:8008/tts/"
     
     async with httpx.AsyncClient(timeout=300.0) as client:
         try:
@@ -46,7 +46,7 @@ async def test_tts_api(audio_path, text):
 async def main():
     # 测试参数
     audio_path = "input/elonmusk.wav"  # 修改为你的音频文件路径
-    text = "Audio longer than 10s will be truncated due to computing resources"
+    text = "Telegram Bot Payments are a free and open platform that allows sellers to accept payments for goods and services from Telegram users. This page covers payments for digital goods and services – if you’re interested in selling physical goods and services, please check out our dedicated page."
     
     await test_tts_api(audio_path, text)
 
