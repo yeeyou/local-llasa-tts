@@ -561,7 +561,7 @@ def build_dashboard():
         primary_hue="blue",
         secondary_hue="slate",
         neutral_hue="slate",
-        font=gr.themes.GoogleFont("Inter"),
+        font=[gr.themes.GoogleFont("Inter")],
         font_mono=gr.themes.GoogleFont("IBM Plex Mono"),
     ).set(
         background_fill_primary="#1E1E2A",
