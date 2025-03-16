@@ -157,7 +157,7 @@ async def process_tts(audio_path: str, target_text: str):
             outputs = model.generate(
                 input_ids,
                 max_length=dynamic_max_length,
-                min_length=int(dynamic_max_length * 0.7),  # 设置最小长度为最大长度的一半
+                # min_length=int(dynamic_max_length * 0.7),  # 设置最小长度为最大长度的一半
                 eos_token_id=speech_end_id,
                 do_sample=True,
                 temperature=1.0,     # 使用默认温度
