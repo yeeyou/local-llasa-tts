@@ -150,7 +150,7 @@ async def process_tts(audio_path: str, target_text: str):
             input_len = input_ids.shape[1]
             margin = 200  # 参考音频模式使用100的margin
             dynamic_max_length = (input_len + margin) * 3
-            dynamic_max_length = min(dynamic_max_length, 2048)
+            dynamic_max_length = min(dynamic_max_length, 4096)
             
             logger.info(f"动态生成长度: {dynamic_max_length} tokens (输入长度: {input_len})")
 
