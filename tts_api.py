@@ -148,8 +148,8 @@ async def process_tts(audio_path: str, target_text: str):
 
             # 计算合适的生成长度
             input_len = input_ids.shape[1]
-            margin = 200  # 参考音频模式使用100的margin
-            dynamic_max_length = input_len + margin
+            margin = 100  # 参考音频模式使用100的margin
+            dynamic_max_length = (input_len + margin) * 1.5
             
             logger.info(f"动态生成长度: {dynamic_max_length} tokens (输入长度: {input_len})")
 
@@ -157,7 +157,7 @@ async def process_tts(audio_path: str, target_text: str):
             outputs = model.generate(
                 input_ids,
                 max_length=dynamic_max_length,
-                min_length=int(dynamic_max_length * 0.5),  # 设置最小长度为最大长度的一半
+                min_length=int(dynamic_max_length * 0.7),  # 设置最小长度为最大长度的一半
                 eos_token_id=speech_end_id,
                 do_sample=True,
                 temperature=1.0,     # 使用默认温度
