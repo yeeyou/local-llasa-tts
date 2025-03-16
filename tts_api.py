@@ -11,8 +11,17 @@ import logging
 import numpy as np
 import sys
 import uvicorn
+import argparse
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig
 from xcodec2.modeling_xcodec2 import XCodec2Model
+
+# 添加命令行参数解析
+parser = argparse.ArgumentParser(description="启动 LLASA TTS API 服务")
+parser.add_argument("--model", choices=["3b", "8b"], default="3b", help="选择 LLASA 模型版本 (3b 或 8b)")
+parser.add_argument("--port", type=int, default=8008, help="API 服务端口")
+parser.add_argument("--host", default="0.0.0.0", help="API 服务地址")
+parser.add_argument("--output-dir", default=str(Path.home() / "tts_out"), help="输出音频保存目录")
+args = parser.parse_args()
 
 # 修改日志配置
 logging.basicConfig(
@@ -29,18 +38,25 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # 创建输出目录
-OUTPUT_DIR = Path.home() / "tts_out"
+OUTPUT_DIR = Path(args.output_dir)
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 app = FastAPI()
 
+# 根据命令行参数选择模型路径
+MODEL_VERSION_MAP = {
+    "3b": "./models/llasa-3b",
+    "8b": "./models/Llasa-8B"
+}
+
+# 获取所选模型路径
+LOCAL_MODEL_PATH = MODEL_VERSION_MAP[args.model]
+LOCAL_CODEC_PATH = "./models/xcodec2"
+
 # 模型加载
 logger.info("=================== 开始加载模型 ===================")
+logger.info(f"选择的模型版本: {args.model} (路径: {LOCAL_MODEL_PATH})")
 quantization_config = BitsAndBytesConfig(load_in_4bit=True)
-
-# 修改为本地模型路径
-LOCAL_MODEL_PATH = "./models/Llasa-8B"
-LOCAL_CODEC_PATH = "./models/xcodec2"
 
 logger.info("加载分词器...")
 tokenizer = AutoTokenizer.from_pretrained(LOCAL_MODEL_PATH)
@@ -130,33 +146,24 @@ async def process_tts(audio_path: str, target_text: str):
                 continue_final_message=True
             ).cuda()
 
-            # 短文本优化 - 使用更小、更高效的动态长度计算
+            # 计算合适的生成长度
             input_len = input_ids.shape[1]
-            target_text_tokens = len(tokenizer.encode(target_text))
+            margin = 100  # 参考音频模式使用100的margin
+            dynamic_max_length = input_len + margin
             
-            # 短文本计算策略 - 基础长度较小，比例调整更精确
-            text_token_ratio = 1.2  # 短文本比例可以更低
-            base_length = 384       # 较小的基础长度
-            
-            # 计算动态长度
-            dynamic_max_length = base_length + len(speech_ids_prefix) + int(target_text_tokens * text_token_ratio)
-            
-            # 对于短文本，限制最大长度以加快处理
-            dynamic_max_length = max(768, min(dynamic_max_length, 2048))
-            
-            logger.info(f"短文本模式 - 动态生成长度: {dynamic_max_length} tokens (输入长度: {input_len}, 文本标记数: {target_text_tokens})")
+            logger.info(f"动态生成长度: {dynamic_max_length} tokens (输入长度: {input_len})")
 
             speech_end_id = tokenizer.convert_tokens_to_ids('<|SPEECH_GENERATION_END|>')
             outputs = model.generate(
                 input_ids,
                 max_length=dynamic_max_length,
+                min_length=int(dynamic_max_length * 0.5),  # 设置最小长度为最大长度的一半
                 eos_token_id=speech_end_id,
                 do_sample=True,
-                top_p=0.95,          # 短文本可以使用稍低的top_p提高稳定性
-                temperature=0.65,     # 短文本降低温度可以减少变异性
-                repetition_penalty=1.3, # 增加重复惩罚以避免短文本中的重复
-                min_length=input_len + 20, # 短文本确保最小生成长度
-                no_repeat_ngram_size=2    # 避免短文本中的重复
+                temperature=1.0,     # 使用默认温度
+                top_p=1.0,          # 使用默认 top_p
+                repetition_penalty=1.2,
+                no_repeat_ngram_size=3
             )
 
             generated_ids = outputs[0][input_ids.shape[1]-len(speech_ids_prefix):-1]
@@ -294,14 +301,15 @@ async def create_tts(
 if __name__ == "__main__":
     print("\n" + "="*50)
     logger.info("TTS 服务正在启动...")
+    logger.info(f"LLASA 模型版本: {args.model}")
     logger.info(f"输出目录: {OUTPUT_DIR}")
-    logger.info("API文档地址: http://localhost:8008/docs")
+    logger.info(f"API文档地址: http://{args.host if args.host != '0.0.0.0' else 'localhost'}:{args.port}/docs")
     print("="*50 + "\n")
 
     uvicorn.run(
         app,
-        host="0.0.0.0",
-        port=8008,
+        host=args.host,
+        port=args.port,
         log_level="info",
         access_log=False  # 禁用访问日志以避免重复
     )
