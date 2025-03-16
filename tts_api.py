@@ -177,7 +177,7 @@ async def process_tts(audio_path: str, target_text: str):
             audio_array = gen_wav[0, 0, :].cpu().numpy()
             
             # 短文本音频后处理 - 使用更严格的截断参数
-            audio_array = trim_silence_end(audio_array, threshold=0.008, buffer_duration=0.15)
+            # audio_array = trim_silence_end(audio_array, threshold=0.008, buffer_duration=0.15)
             
             logger.info("语音生成完成")
             return audio_array
