@@ -102,9 +102,11 @@ async def process_tts(audio_path: str, target_text: str):
         prompt_text = whisper_turbo_pipe(prompt_wav[0].numpy())['text'].strip()
         logger.info(f"语音识别结果: {prompt_text}")
 
+        # 优化短文本处理 - 确保目标文本不超过300字符
         if len(target_text) == 0:
             raise HTTPException(status_code=400, detail="Target text cannot be empty")
         elif len(target_text) > 300:
+            logger.info(f"文本超过300字符，截断至300字符")
             target_text = target_text[:300]
 
         input_text = prompt_text + ' ' + target_text
@@ -128,15 +130,33 @@ async def process_tts(audio_path: str, target_text: str):
                 continue_final_message=True
             ).cuda()
 
+            # 短文本优化 - 使用更小、更高效的动态长度计算
+            input_len = input_ids.shape[1]
+            target_text_tokens = len(tokenizer.encode(target_text))
+            
+            # 短文本计算策略 - 基础长度较小，比例调整更精确
+            text_token_ratio = 1.2  # 短文本比例可以更低
+            base_length = 384       # 较小的基础长度
+            
+            # 计算动态长度
+            dynamic_max_length = base_length + len(speech_ids_prefix) + int(target_text_tokens * text_token_ratio)
+            
+            # 对于短文本，限制最大长度以加快处理
+            dynamic_max_length = max(768, min(dynamic_max_length, 2048))
+            
+            logger.info(f"短文本模式 - 动态生成长度: {dynamic_max_length} tokens (输入长度: {input_len}, 文本标记数: {target_text_tokens})")
+
             speech_end_id = tokenizer.convert_tokens_to_ids('<|SPEECH_GENERATION_END|>')
             outputs = model.generate(
                 input_ids,
-                max_length=2048,
+                max_length=dynamic_max_length,
                 eos_token_id=speech_end_id,
                 do_sample=True,
-                top_p=1,
-                temperature=0.7,  # 略微降低温度以减少随机性
-                repetition_penalty=1.2  # 添加重复惩罚参数
+                top_p=0.95,          # 短文本可以使用稍低的top_p提高稳定性
+                temperature=0.65,     # 短文本降低温度可以减少变异性
+                repetition_penalty=1.3, # 增加重复惩罚以避免短文本中的重复
+                min_length=input_len + 20, # 短文本确保最小生成长度
+                no_repeat_ngram_size=2    # 避免短文本中的重复
             )
 
             generated_ids = outputs[0][input_ids.shape[1]-len(speech_ids_prefix):-1]
@@ -149,8 +169,8 @@ async def process_tts(audio_path: str, target_text: str):
             # 获取解码后的音频
             audio_array = gen_wav[0, 0, :].cpu().numpy()
             
-            # 音频后处理：去除尾部杂音
-            audio_array = trim_silence_end(audio_array)
+            # 短文本音频后处理 - 使用更严格的截断参数
+            audio_array = trim_silence_end(audio_array, threshold=0.008, buffer_duration=0.15)
             
             logger.info("语音生成完成")
             return audio_array
@@ -159,15 +179,15 @@ async def process_tts(audio_path: str, target_text: str):
         logger.error(f"处理过程中发生错误: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-# 添加一个函数用于检测和修剪音频末尾的静音或杂音
-def trim_silence_end(audio_array, threshold=0.01, min_silence_duration=0.5, sample_rate=16000):
+# 修改 trim_silence_end 函数，支持更精确的缓冲区控制
+def trim_silence_end(audio_array, threshold=0.01, buffer_duration=0.2, sample_rate=16000):
     """
-    修剪音频末尾的静音或杂音
+    修剪音频末尾的静音或杂音 - 优化版
     
     参数:
         audio_array: 音频数据数组
         threshold: 振幅阈值，低于此值视为静音
-        min_silence_duration: 最小静音持续时间（秒）
+        buffer_duration: 留下的缓冲区长度（秒）
         sample_rate: 采样率
     """
     # 计算音频能量
@@ -195,8 +215,8 @@ def trim_silence_end(audio_array, threshold=0.01, min_silence_duration=0.5, samp
     
     last_active = active_frames[-1]
     
-    # 确定截断位置（最后一个活跃帧后加上少量缓冲区）
-    buffer_frames = int(0.2 * sample_rate / hop_length)  # 200ms缓冲区
+    # 确定截断位置（最后一个活跃帧后加上指定的缓冲区）
+    buffer_frames = int(buffer_duration * sample_rate / hop_length)
     end_frame = min(last_active + buffer_frames, len(energy) - 1)
     
     # 转换回样本索引
