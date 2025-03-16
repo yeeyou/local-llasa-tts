@@ -38,7 +38,7 @@ logger.info("=================== 开始加载模型 ===================")
 quantization_config = BitsAndBytesConfig(load_in_4bit=True)
 
 # 修改为本地模型路径
-LOCAL_MODEL_PATH = "./models/Llasa-8b"
+LOCAL_MODEL_PATH = "./models/Llasa-8B"
 LOCAL_CODEC_PATH = "./models/xcodec2"
 
 logger.info("加载分词器...")
