@@ -8,6 +8,7 @@ import torchaudio
 import tempfile
 import os
 import logging
+import numpy as np
 import sys
 import uvicorn
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig
