@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import time
+import argparse
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse
 import torch
@@ -12,6 +13,14 @@ import sys
 import uvicorn
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig
 from xcodec2.modeling_xcodec2 import XCodec2Model
+
+# 添加命令行参数解析
+parser = argparse.ArgumentParser(description="启动 LLASA TTS API 服务")
+parser.add_argument("--model", choices=["3b", "8b"], default="3b", help="选择 LLASA 模型版本 (3b 或 8b)")
+parser.add_argument("--port", type=int, default=8008, help="API 服务端口")
+parser.add_argument("--host", default="0.0.0.0", help="API 服务地址")
+parser.add_argument("--output-dir", default=str(Path.home() / "tts_out"), help="输出音频保存目录")
+args = parser.parse_args()
 
 # 修改日志配置
 logging.basicConfig(
@@ -28,28 +37,45 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # 创建输出目录
-OUTPUT_DIR = Path.home() / "tts_out"
+OUTPUT_DIR = Path(args.output_dir)
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 app = FastAPI()
 
+# 定义模型路径映射
+MODEL_PATHS = {
+    "3b": "./models/llasa-3b",
+    "8b": "./models/Llasa-8B"
+}
+
+# 获取选择的模型路径
+SELECTED_MODEL = args.model.lower()
+LOCAL_MODEL_PATH = MODEL_PATHS.get(SELECTED_MODEL)
+LOCAL_CODEC_PATH = "./models/xcodec2"
+WHISPER_MODEL_PATH = "./models/whisper-large-v3-turbo"
+
+# 更新量化配置以匹配 hf_app.py
+quantization_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_compute_dtype=torch.float16,
+    bnb_4bit_use_double_quant=True
+)
+
 # 模型加载
 logger.info("=================== 开始加载模型 ===================")
-quantization_config = BitsAndBytesConfig(load_in_4bit=True)
-
-# 修改为本地模型路径
-LOCAL_MODEL_PATH = "./models/Llasa-8B"
-LOCAL_CODEC_PATH = "./models/xcodec2"
+logger.info(f"选择使用模型: LLASA-{SELECTED_MODEL.upper()}")
+logger.info(f"模型路径: {LOCAL_MODEL_PATH}")
 
 logger.info("加载分词器...")
 tokenizer = AutoTokenizer.from_pretrained(LOCAL_MODEL_PATH)
-logger.info("加载 LLASA 模型...")
+logger.info(f"加载 LLASA {SELECTED_MODEL.upper()} 模型...")
 model = AutoModelForCausalLM.from_pretrained(
     LOCAL_MODEL_PATH,
     trust_remote_code=True,
     device_map='cuda',
     quantization_config=quantization_config,
-    low_cpu_mem_usage=True
+    low_cpu_mem_usage=True,
+    torch_dtype=torch.float16  # 添加 torch_dtype 参数
 )
 
 logger.info("加载 XCodec2 模型...")
@@ -59,7 +85,7 @@ Codec_model.eval().cuda()
 logger.info("加载 Whisper 模型...")
 whisper_turbo_pipe = pipeline(
     "automatic-speech-recognition",
-    model="./models/whisper-large-v3-turbo",
+    model=WHISPER_MODEL_PATH,
     torch_dtype=torch.float16,
     device='cuda',
 )
@@ -82,7 +108,7 @@ def extract_speech_ids(speech_tokens_str):
             print(f"Unexpected token: {token_str}")
     return speech_ids
 
-async def process_tts(audio_path: str, target_text: str):
+async def process_tts(audio_path: str, target_text: str, temperature=0.8, top_p=1.0, max_length=2048):
     try:
         logger.info(f"开始处理音频，目标文本长度：{len(target_text)}")
         waveform, sample_rate = torchaudio.load(audio_path)
@@ -127,14 +153,24 @@ async def process_tts(audio_path: str, target_text: str):
                 continue_final_message=True
             ).cuda()
 
+            # 添加注意力掩码，匹配 hf_app.py 中的方式
+            attention_mask = torch.ones_like(input_ids).cuda()
+            
             speech_end_id = tokenizer.convert_tokens_to_ids('<|SPEECH_GENERATION_END|>')
+            
+            # 更新 generate 参数以匹配 hf_app.py
             outputs = model.generate(
                 input_ids,
-                max_length=2048,
+                attention_mask=attention_mask,
+                pad_token_id=(tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id),
+                max_length=max_length,
+                min_length=int(max_length * 0.5),
                 eos_token_id=speech_end_id,
                 do_sample=True,
-                top_p=1,
-                temperature=0.8
+                top_p=float(top_p),
+                temperature=float(temperature),
+                repetition_penalty=1.2,
+                no_repeat_ngram_size=3,
             )
 
             generated_ids = outputs[0][input_ids.shape[1]-len(speech_ids_prefix):-1]
@@ -157,7 +193,10 @@ ALLOWED_FORMATS = {'.wav', '.mp3'}
 @app.post("/tts/")
 async def create_tts(
     audio: UploadFile = File(...),
-    text: str = Form(default="")
+    text: str = Form(default=""),
+    temperature: float = Form(default=0.8),
+    top_p: float = Form(default=1.0),
+    max_length: int = Form(default=2048)
 ):
     temp_audio_path = None
     try:
@@ -165,6 +204,7 @@ async def create_tts(
         logger.info(f"收到新的TTS请求:")
         logger.info(f"音频文件: {audio.filename}")
         logger.info(f"原始文本内容: '{text}'")
+        logger.info(f"生成参数: temperature={temperature}, top_p={top_p}, max_length={max_length}")
 
         # 验证音频文件
         file_extension = Path(audio.filename).suffix.lower()
@@ -185,7 +225,13 @@ async def create_tts(
 
         try:
             logger.info("开始处理 TTS...")
-            audio_array = await process_tts(temp_audio_path, text)
+            audio_array = await process_tts(
+                temp_audio_path, 
+                text, 
+                temperature=temperature,
+                top_p=top_p,
+                max_length=max_length
+            )
 
             # 使用时间戳创建唯一的输出文件名
             output_filename = f"output_{int(time.time())}.wav"
@@ -212,19 +258,30 @@ async def create_tts(
             try:
                 os.unlink(temp_audio_path)
             except Exception as e:
-                logger.warning(f"清理临时文��失败: {str(e)}")
+                logger.warning(f"清理临时文件失败: {str(e)}")
+
+@app.get("/info")
+async def get_info():
+    """返回服务信息"""
+    return {
+        "model": f"LLASA-{SELECTED_MODEL.upper()}",
+        "whisper_model": "whisper-large-v3-turbo",
+        "output_directory": str(OUTPUT_DIR),
+        "allowed_formats": list(ALLOWED_FORMATS)
+    }
 
 if __name__ == "__main__":
     print("\n" + "="*50)
-    logger.info("TTS 服务正在启动...")
+    logger.info(f"TTS 服务正在启动 (LLASA-{SELECTED_MODEL.upper()})...")
     logger.info(f"输出目录: {OUTPUT_DIR}")
-    logger.info("API文档地址: http://localhost:8008/docs")
+    logger.info(f"API文档地址: http://localhost:{args.port}/docs")
+    logger.info(f"服务信息: http://localhost:{args.port}/info")
     print("="*50 + "\n")
 
     uvicorn.run(
         app,
-        host="0.0.0.0",
-        port=8008,
+        host=args.host,
+        port=args.port,
         log_level="info",
         access_log=False  # 禁用访问日志以避免重复
     )
