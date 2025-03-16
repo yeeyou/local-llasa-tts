@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+torch
+torchaudio
+transformers
+python-multipart
+soundfile
+numpy
+bitsandbytes
