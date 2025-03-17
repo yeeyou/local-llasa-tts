@@ -122,7 +122,7 @@ async def process_tts(audio_path: str, target_text: str):
         if len(target_text) == 0:
             raise HTTPException(status_code=400, detail="Target text cannot be empty")
         elif len(target_text) > 300:
-            logger.info(f"文本超过300字符，截断至300字符")
+            logger.info(f"文本超过300字符，截断至300字符") # 这里要调整，按照字节好一点
             target_text = target_text[:300]
 
         input_text = prompt_text + ' ' + target_text
